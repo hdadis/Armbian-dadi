@@ -11,6 +11,18 @@ apt update -y
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install moc
+sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-ugly gstreamer1.0-plugins-ugly-multiverse
+mocp -S
+pactl info
+sudo apt install pipewire pipewire-pulse pipewire-audio-client-libraries libspa-0.2-bluetooth libspa-0.2-jack wireplumber
+systemctl --user --now disable pulseaudio.service pulseaudio.socket
+systemctl --user mask pulseaudio.service pulseaudio.socket
+systemctl --user --now enable pipewire.socket pipewire-pulse.socket
+systemctl --user --now start pipewire.socket pipewire-pulse.socket
+sudo apt remove pulseaudio-module-bluetooth
+systemctl --user --now enable wireplumber.service
+mocp -S
 sudo apt install moc moc-ffmpeg-plugin -y
 sudo apt install alsa-utils -y
 sudo usermod -a -G audio $USER
