@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Memperbarui daftar paket..."
+apt update -y
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install git -y
+git clone https://gitlab.com/Shinobi-Systems/Shinobi.git Shinobi
+cd Shinobi
+sudo chmod +x INSTALL/ubuntu.sh
+sudo INSTALL/ubuntu.sh
+
+echo "Instalasi selesai!"
