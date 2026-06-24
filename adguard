@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Memperbarui daftar paket..."
+apt update -y
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+wget --no-verbose -O - https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+sudo nano /etc/systemd/resolved.conf
+sudo systemctl stop systemd-resolved.service
+sudo systemctl restart systemd-resolved
+sudo nano /etc/systemd/resolved.conf
+sudo /opt/AdGuardHome/AdGuardHome -s restart
+sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+
+echo "Instalasi selesai!"
