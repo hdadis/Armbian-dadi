@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Memperbarui daftar paket..."
+apt update -y
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt-get install ntfsprogs
+sudo apt-get install ntfs-3g
+nano /etc/fstab
+
+echo "Instalasi selesai!"
