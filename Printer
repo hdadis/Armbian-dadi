@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Memperbarui daftar paket..."
+apt update -y
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt-get install cups printer-driver-gutenprint p910nd hplip printer-driver-foo2zjs
+sudo apt install sane sane-utils simple-scan xsane nmap netcat-openbsd
+sudo add-apt-repository ppa:thierry-f/fork-michael-gruz
+sudo apt install sane-backends
+sudo apt install sane-frontends
+sudo nmap 192.168.18.21
+nano /etc/sane.d/saned.conf
+nano /etc/cups/cupsd.conf
+sudo apt install kmod-usb-printer p910nd luci-app-p910ndkmod-usb-printer
+sudo systemctl start cups
+sudo systemctl enable cups
+sudo systemctl restart cups
+sudo service cups restart
+sudo systemctl status cups
+sudo systemctl enable cups.service
+sudo systemctl status cups.service
+sudo apt install scangearmp2
+sudo apt install printer-driver-cnijfilter-mg4200
+sudo apt install cnijfilter2
+sudo apt install avahi-daemon
+sudo systemctl start avahi-daemon
+sudo systemctl enable avahi-daemon
+sudo systemctl status avahi-daemon
+sudo useradd -g lpadmin cupsadmin
+sudo usermod -a -G lpadmin dadi
+sudo passwd cupsadmin
+980Abc
+sudo cupsctl --remote-any
+nano /etc/default/saned
+nano /etc/sane.d/saned.conf
+nano /usr/local/bin/jetdirect.sh
+sudo chmod +x /usr/local/bin/jetdirect.sh
+nano /etc/systemd/system/jetdirect.service
+nano /etc/default/p910nd
+sudo systemctl daemon-reload
+sudo systemctl start jetdirect
+sudo systemctl enable jetdirect
+sudo killall cupsd
+sudo /etc/init.d/cups restart
+
+
+echo "Instalasi selesai!"
