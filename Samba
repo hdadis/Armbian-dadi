@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Memperbarui daftar paket..."
+apt update -y
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install samba cifs-utils smbclient -y
+kdir -p /home/armbian/sambashare
+chmod -R 777 /home/armbian/sambashare
+sudo service smbd restart
+sudo testparm
+sudo systemctl status smbd
+sudo mkdir /samba/
+sudo chown :sambashare /samba/
+sudo mkdir /samba/dadi
+sudo adduser --home /samba/dadi --no-create-home --shell /usr/sbin/nologin --ingroup sambashare dadi
+sudo chown dadi:sambashare /samba/dadi
+sudo chmod 2770 /samba/dadi
+sudo smbpasswd -a dadi
+980123Abc
+sudo smbpasswd -e dadi
+sudo service smbd restart
+sudo testparm
+
+echo "Instalasi selesai!"
