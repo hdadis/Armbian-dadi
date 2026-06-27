@@ -38,6 +38,8 @@ sudo useradd -g lpadmin cupsadmin
 sudo usermod -a -G lpadmin dadi
 sudo passwd cupsadmin
 980Abc
+sudo passwd dadi
+980Abc
 sudo cupsctl --remote-any
 nano /etc/default/saned
 nano /etc/sane.d/saned.conf
