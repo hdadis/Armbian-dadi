@@ -6,9 +6,6 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo "Memperbarui daftar paket..."
-apt update -y
-
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 sudo mkdir -p --mode=0755 /usr/share/keyrings
