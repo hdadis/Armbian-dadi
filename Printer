@@ -41,16 +41,16 @@ sudo passwd cupsadmin
 sudo passwd dadi
 980Abc
 sudo cupsctl --remote-any
-nano /etc/default/saned
-nano /etc/sane.d/saned.conf
-nano /usr/local/bin/jetdirect.sh
 sudo chmod +x /usr/local/bin/jetdirect.sh
-nano /etc/systemd/system/jetdirect.service
-nano /etc/default/p910nd
 sudo systemctl daemon-reload
 sudo systemctl start jetdirect
 sudo systemctl enable jetdirect
 sudo killall cupsd
+nano /etc/default/saned
+nano /etc/sane.d/saned.conf
+nano /usr/local/bin/jetdirect.sh
+nano /etc/systemd/system/jetdirect.service
+nano /etc/default/p910nd
 sudo /etc/init.d/cups restart
 
 
