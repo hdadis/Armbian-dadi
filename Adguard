@@ -6,9 +6,6 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo "Memperbarui daftar paket..."
-apt update -y
-
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 wget --no-verbose -O - https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
