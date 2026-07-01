@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+sudo tailscale up --advertise-routes=192.168.18.0/24 --ssh
+tailscale set --ssh
+tailscale ip
+tailscale status
+
+echo "Instalasi selesai!"
