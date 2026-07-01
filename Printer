@@ -48,6 +48,10 @@ nano /usr/local/bin/jetdirect.sh
 nano /etc/systemd/system/jetdirect.service
 nano /etc/default/p910nd
 sudo /etc/init.d/cups restart
-
+sudo systemctl daemon-reload
+sudo systemctl start jetdirect
+sudo systemctl enable jetdirect
+sudo killall cupsd
+sudo /etc/init.d/cups restart
 
 echo "Instalasi selesai!"
