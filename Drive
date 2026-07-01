@@ -10,6 +10,10 @@ echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 sudo apt-get install ntfsprogs
 sudo apt-get install ntfs-3g
+sudo ntfsfix /dev/sda1
+sudo gedit fstab
+mkdir /mnt/media_ext
+mount /dev/sda1 /mnt/media_ext
 nano /etc/fstab
 
 echo "Instalasi selesai!"
