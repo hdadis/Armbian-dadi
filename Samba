@@ -12,8 +12,6 @@ sudo apt install samba cifs-utils smbclient -y
 mkdir -p /home/armbian/sambashare
 chmod -R 777 /home/armbian/sambashare
 sudo service smbd restart
-sudo testparm
-sudo systemctl status smbd
 sudo mkdir /samba/
 sudo chown :sambashare /samba/
 sudo mkdir /samba/dadi
