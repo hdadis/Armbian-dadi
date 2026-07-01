@@ -14,8 +14,6 @@ sudo add-apt-repository ppa:thierry-f/fork-michael-gruz
 sudo apt install sane-backends
 sudo apt install sane-frontends
 sudo nmap 192.168.18.21
-nano /etc/sane.d/saned.conf
-nano /etc/cups/cupsd.conf
 sudo apt install kmod-usb-printer p910nd luci-app-p910ndkmod-usb-printer
 sudo systemctl start cups
 sudo systemctl enable cups
@@ -43,8 +41,9 @@ sudo systemctl daemon-reload
 sudo systemctl start jetdirect
 sudo systemctl enable jetdirect
 sudo killall cupsd
-nano /etc/default/saned
 nano /etc/sane.d/saned.conf
+nano /etc/cups/cupsd.conf
+nano /etc/default/saned
 nano /usr/local/bin/jetdirect.sh
 nano /etc/systemd/system/jetdirect.service
 nano /etc/default/p910nd
