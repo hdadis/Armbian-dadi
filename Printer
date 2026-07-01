@@ -27,7 +27,6 @@ sudo apt install printer-driver-cnijfilter-mg4200
 sudo apt install cnijfilter2
 sudo apt install avahi-daemon
 sudo systemctl start avahi-daemon
-sudo systemctl enable avahi-daemon
 sudo useradd -g lpadmin cupsadmin
 sudo usermod -a -G lpadmin dadi
 sudo passwd cupsadmin
@@ -52,5 +51,6 @@ sudo systemctl start jetdirect
 sudo systemctl enable jetdirect
 sudo killall cupsd
 sudo /etc/init.d/cups restart
+sudo systemctl enable avahi-daemon
 
 echo "Instalasi selesai!"
