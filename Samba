@@ -9,7 +9,7 @@ fi
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 sudo apt install samba cifs-utils smbclient -y
-kdir -p /home/armbian/sambashare
+mkdir -p /home/armbian/sambashare
 chmod -R 777 /home/armbian/sambashare
 sudo service smbd restart
 sudo testparm
