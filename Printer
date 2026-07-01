@@ -28,7 +28,6 @@ sudo apt install cnijfilter2
 sudo apt install avahi-daemon
 sudo systemctl start avahi-daemon
 sudo systemctl enable avahi-daemon
-sudo systemctl status avahi-daemon
 sudo useradd -g lpadmin cupsadmin
 sudo usermod -a -G lpadmin dadi
 sudo passwd cupsadmin
