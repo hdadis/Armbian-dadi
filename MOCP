@@ -26,7 +26,6 @@ mocp -S
 sudo apt install moc moc-ffmpeg-plugin -y
 sudo apt install alsa-utils -y
 sudo usermod -a -G audio $USER
-alsamixer
 sudo apt install pulseaudio pulseaudio-utils -y
 sudo usermod -a -G pulse-access $USER
 
