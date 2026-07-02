@@ -1,1 +1,32 @@
+#!/bin/bash
 
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install docker.io docker-compose -y
+mkdir -p ~/gopeed/Downloads ~/gopeed/storage
+cd ~/gopeed
+nano docker-compose.yml
+services:
+  gopeed:
+    container_name: gopeed
+    image: liwei2633/gopeed
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "9999:9999"
+    environment:
+      - GOPEED_ADDRESS=0.0.0.0
+      - GOPEED_USERNAME=dadi   # Change this to your preferred username
+      - GOPEED_PASSWORD=980Abc   # Change this to your preferred password
+    volumes:
+      - /path/to/your/storage/folder/on/host:/app/Downloads # Update to match your desired download directory
+      - ./storage:/mnt/seagate/Downloads/IDM
+docker-compose up -d
+
+echo "Instalasi selesai!"
