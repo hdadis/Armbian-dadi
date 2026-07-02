@@ -25,8 +25,8 @@ services:
       - GOPEED_USERNAME=dadi   # Change this to your preferred username
       - GOPEED_PASSWORD=980Abc   # Change this to your preferred password
     volumes:
-      - /path/to/your/storage/folder/on/host:/app/Downloads # Update to match your desired download directory
-      - ./storage:/mnt/seagate/Downloads/IDM
+      - /Downloads:/mnt/seagate/Downloads/IDM # Update to match your desired download directory
+      - /Config:/opt/Gopeed
 docker-compose up -d
 
 echo "Instalasi selesai!"
