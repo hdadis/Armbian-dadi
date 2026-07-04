@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install mpd
+sudo nano /etc/mpd.conf
+audio_output {
+    type            "alsa"
+    name            "My 432Hz Device"
+    # Define pitch alteration properties here
+}
+sudo systemctl restart mpd
+sudo nano /etc/pulse/daemon.conf
+default-sample-format = s24le
+default-sample-rate = 192000
+resample-method = soxr-vhq
+pulseaudio -k && pulseaudio -D
+
+echo "Instalasi selesai!"
