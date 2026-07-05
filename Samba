@@ -11,6 +11,7 @@ echo "Menginstal aplikasi..."
 sudo apt install samba cifs-utils smbclient -y
 mkdir -p /home/armbian/sambashare
 chmod -R 777 /home/armbian/sambashare
+sudo nano /etc/samba/smb.conf
 sudo mkdir /samba/
 sudo chown :sambashare /samba/
 sudo mkdir /samba/dadi
