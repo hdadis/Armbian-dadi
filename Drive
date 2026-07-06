@@ -16,5 +16,8 @@ sudo gedit fstab
 mkdir /mnt/Seagate
 mount /dev/sda1 /mnt/Seagate
 nano /etc/fstab
+UUID="EAFE72BDFE72819D" /mnt/media_ext    ntfs-3g   defaults,nofail,noatime  0  2
+sudo systemctl daemon-reload
+sudo mount -a
 
 echo "Instalasi selesai!"
