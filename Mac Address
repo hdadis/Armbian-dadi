@@ -7,12 +7,6 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "Menginstal aplikasi..."
-sudo wget -O nano /etc/network/interfaces.d/*
-# Network is managed by Network manager
-auto eth0
-iface eth0 inet dhcp
-
-hwaddress ether 00:15:18:01:81:31
-iface lo inet loopback
+sudo wget -O /etc/network/interfaces.d/* https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Mac_00%3A15
 
 echo "Instalasi selesai!"
