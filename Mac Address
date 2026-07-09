@@ -1,1 +1,12 @@
+#!/bin/bash
 
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+sudo wget -O nano /etc/network/interfaces.d/* 
+
+echo "Instalasi selesai!"
