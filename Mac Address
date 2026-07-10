@@ -7,6 +7,6 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "Menginstal aplikasi..."
-sudo wget -O /etc/network/interfaces.d/* https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Mac_IP%2021
+sudo wget -O nano /etc/network/interfaces.d/* https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Mac_IP%2021
 
 echo "Instalasi selesai!"
