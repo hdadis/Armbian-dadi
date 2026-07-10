@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+curl -LO https://raw.githubusercontent.com/opensensor/lightNVR/main/docker-compose.yml
+docker compose up -d
+docker compose logs -f
+docker pull matteius/lightnvr:latest
+docker pull ghcr.io/opensensor/lightnvr:latest
+https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/CCTV
+
+echo "Instalasi selesai!"
