@@ -16,7 +16,7 @@ exit 1
 fi
 
 echo "Menginstal aplikasi..."
-sudo wget -O nano docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Gopeed
+sudo wget -O docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Gopeed
 docker-compose up -d
 
 echo "Instalasi selesai!"
