@@ -11,11 +11,6 @@ echo "Menginstal aplikasi..."
 sudo apt install docker.io docker-compose -y
 mkdir -p ~/gopeed/Downloads ~/gopeed/storage
 cd ~/gopeed
-echo "Harap jalankan script ini sebagai root (gunakan sudo)"
-exit 1
-fi
-
-echo "Menginstal aplikasi..."
 sudo wget -O docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Gopeed
 docker-compose up -d
 
