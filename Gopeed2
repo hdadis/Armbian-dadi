@@ -8,8 +8,9 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt install docker.io docker-compose -y
-mkdir -p ~/gopeed/Downloads ~/gopeed/storage
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+mkdir -p ~/gopeed && cd ~/gopeed
 cd ~/gopeed
 sudo wget -O docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Gopeed
 docker-compose up -d
