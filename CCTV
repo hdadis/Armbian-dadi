@@ -10,8 +10,7 @@ echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 mkdir -p ~/lightnvr && cd ~/lightnvr
 cd ~/lightnvr
-nano docker-compose.yml
-
+sudo wget -O docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/CCTV
 docker-compose up -d
 
 
