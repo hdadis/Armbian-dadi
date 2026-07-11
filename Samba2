@@ -118,6 +118,7 @@ cat <<EOT >> $SMB_CONF
    comment = External
    path = $MOUNT_POINT
    browseable = yes
+   public = No
    read only = no
    guest ok = no
    valid users = $SHARE_USER
