@@ -9,6 +9,7 @@ fi
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 wget --no-verbose -O - https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+sudo sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 sudo nano /etc/systemd/resolved.conf
 sudo systemctl stop systemd-resolved.service
 sudo systemctl stop systemd-resolved
