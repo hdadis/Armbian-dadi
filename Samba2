@@ -17,6 +17,18 @@ echo "--------------------------------------------------"
 # 1. Update system dan install Samba
 echo "[+] Memperbarui package list dan menginstal Samba..."
 apt install -y samba samba-common-bin
+sudo apt install samba cifs-utils smbclient -y
+mkdir -p /home/armbian/sambashare
+chmod -R 777 /home/armbian/sambashare
+sudo nano /etc/samba/smb.conf
+sudo mkdir /samba/
+sudo chown :sambashare /samba/
+sudo mkdir /samba/dadi
+sudo adduser --home /samba/dadi --no-create-home --shell /usr/sbin/nologin --ingroup sambashare dadi
+sudo chown dadi:sambashare /samba/dadi
+sudo chmod 2770 /samba/dadi
+sudo chmod -R 777 /mnt/External
+sudo chown -R dadi:sambashare /mnt/External
 
 # 2. Deteksi USB Drive Otomatis
 echo "[+] Mendeteksi USB drive yang terhubung..."
