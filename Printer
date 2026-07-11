@@ -45,12 +45,12 @@ echo "Menginstal aplikasi Saned"
 sudo wget -O /etc/cups/cupsd.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Saned
 nano /etc/sane.d/saned.conf
 echo "Menginstal aplikasi Jetdirect"
-sudo wget -O /usr/local/bin/jetdirect.sh hhttps://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Jetdirect
+sudo wget -O /usr/local/bin/jetdirect.sh https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Jetdirect
 sudo chmod +x /usr/local/bin/jetdirect.sh
 echo "Menginstal aplikasi Jetdirect_Service"
 sudo wget -O /etc/systemd/system/jetdirect.service https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Jetdirect_Service
 echo "Menginstal aplikasi p910nd"
-sudo wget -O /etc/default/p910nd hhttps://raw.githubusercontent.com/hdadis/Script/refs/heads/main/p910nd
+sudo wget -O /etc/default/p910nd https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/p910nd
 sudo /etc/init.d/cups restart
 sudo systemctl daemon-reload
 sudo systemctl start jetdirect
