@@ -1,0 +1,134 @@
+#!/bin/bash
+
+# ==============================================================================
+# Script Name: setup_samba.sh
+# Description: Otomatisasi Instalasi Samba, Deteksi USB, dan Konfigurasi Sharing
+# ==============================================================================
+
+# PENTING: Jalankan skrip ini sebagai root atau dengan sudo
+if [ "$EUID" -ne 0 ]; then
+  echo "[-] Harap jalankan skrip ini dengan hak akses sudo/root."
+  exit 1
+fi
+
+echo "[+] Memulai setup Samba dan konfigurasi storage..."
+echo "--------------------------------------------------"
+
+# 1. Update system dan install Samba
+echo "[+] Memperbarui package list dan menginstal Samba..."
+apt install -y samba samba-common-bin
+
+# 2. Deteksi USB Drive Otomatis
+echo "[+] Mendeteksi USB drive yang terhubung..."
+# Mengambil nama device USB terbesar/terakhir yang terdeteksi di /dev/sdX
+USB_DEV=$(lsblk -d -o NAME,TRAN | grep usb | awk '{print $1}' | head -n 1)
+
+if [ -z "$USB_DEV" ]; then
+    echo "[-] PERINGATAN: Tidak ada USB drive yang terdeteksi via interface USB."
+    echo "    Mencoba mencari external disk eksternal (/dev/sdb1 atau sejenisnya)..."
+    # Fallback: mencari partisi non-sistem biasa jika dijalankan di VM/container
+    USB_PART=$(lsblk -ln -o NAME,MOUNTPOINT | grep -v '^sda' | awk '$2=="" {print $1}' | head -n 1)
+else
+    # Jika terdeteksi device USB, ambil partisi pertamanya (misal sdb -> sdb1)
+    USB_PART=$(lsblk -ln -o NAME /dev/$USB_DEV | grep -E "[0-9]$" | head -n 1)
+fi
+
+if [ -z "$USB_PART" ]; then
+    echo "[-] ERROR: Gagal mendeteksi partisi USB baru."
+    echo "    Silakan colok USB Anda terlebih dahulu lalu jalankan ulang skrip."
+    exit 1
+fi
+
+USB_PATH="/dev/$USB_PART"
+MOUNT_POINT="/mnt/External"
+
+echo "[+] USB terdeteksi di: $USB_PATH"
+echo "[+] Target mount point: $MOUNT_POINT"
+
+# 3. Membuat Mount Point dan Mount USB
+mkdir -p $MOUNT_POINT
+
+# Cek apakah sudah ter-mount, jika belum lakukan mount
+if ! mountpoint -q $MOUNT_POINT; then
+    echo "[+] Melakukan mounting $USB_PATH ke $MOUNT_POINT..."
+    mount $USB_PATH $MOUNT_POINT
+    if [ $? -ne 0 ]; then
+        echo "[-] Gagal mounting. Memeriksa format file system..."
+        # Mencoba mounting otomatis (pastikan format ntfs-3g/exfat terinstall jika file system windows)
+        mount -t auto $USB_PATH $MOUNT_POINT
+    fi
+fi
+
+# Set agar USB otomatis mount saat system reboot (fstab)
+UUID_USB=$(blkid -s UUID -o value $USB_PATH)
+if [ ! -z "$UUID_USB" ]; then
+    if ! grep -q "$UUID_USB" /etc/fstab; then
+        echo "[+] Menambahkan USB ke /etc/fstab agar auto-mount permanen..."
+        echo "UUID=$UUID_USB $MOUNT_POINT auto nosuid,nodev,nofail 0 2" >> /etc/fstab
+    fi
+else
+    if ! grep -q "$USB_PATH" /etc/fstab; then
+        echo "UUID tidak ditemukan, menggunakan path device untuk fstab..."
+        echo "$USB_PATH $MOUNT_POINT auto nosuid,nodev,nofail 0 2" >> /etc/fstab
+    fi
+fi
+
+# 4. Membuat User Terproteksi & Password Privat
+SHARE_USER="dadi"
+echo "[+] Membuat user system baru untuk Samba: $SHARE_USER (akses login shell untuk keamanan)"
+if ! id "$SHARE_USER" &>/dev/null; then
+    useradd -M -s /sbin/login $SHARE_USER
+fi
+
+# Mengatur hak akses folder agar bisa diakses user Samba
+chown -R $SHARE_USER:privategroup $MOUNT_POINT
+chmod -R 770 $MOUNT_POINT
+
+echo "--------------------------------------------------"
+echo "[!] SILAKAN MASUKKAN PASSWORD PRIVAT UNTUK AKSES SAMBA/USER:"
+echo "--------------------------------------------------"
+# Memicu input password interaktif untuk user Samba
+smbpasswd -a $SHARE_USER
+smbpasswd -e $SHARE_USER
+
+# 5. Konfigurasi File smb.conf
+SMB_CONF="/etc/samba/smb.conf"
+echo "[+] Backup konfigurasi smb.conf asli..."
+cp $SMB_CONF "$SMB_CONF.bak_$(date +%F_%R)"
+
+echo "[+] Menulis konfigurasi sharing baru ke $SMB_CONF..."
+# Membuat ulang block config, atau menambahkan di bagian paling bawah
+cat <<EOT >> $SMB_CONF
+
+# ==========================================================
+# Konfigurasi Custom Network Share - Terproteksi Password
+# ==========================================================
+[Secure-USB-Share]
+   comment = External
+   path = $MOUNT_POINT
+   browseable = yes
+   read only = no
+   guest ok = no
+   valid users = $SHARE_USER
+   force user = $SHARE_USER
+   create mask = 0660
+   directory mask = 0770
+EOT
+
+# 6. Restart Service Samba
+echo "[+] Merestart layanan Samba untuk menerapkan perubahan..."
+systemctl restart smbd
+systemctl enable smbd
+
+echo "--------------------------------------------------"
+echo "[+] PROSES INSTALASI DAN KONFIGURASI SELESAI!"
+echo "--------------------------------------------------"
+echo " IP Address Server Anda saat ini:"
+hostname -I | awk '{print $1}'
+echo ""
+echo " Cara Mengakses dari Client:"
+echo " - Windows: WIn + R -> \\\\<IP_SERVER>\\Secure-USB-Share"
+echo " - Mac/Linux: smb://<IP_SERVER>/Secure-USB-Share"
+echo " - Gunakan Username: $SHARE_USER"
+echo " - Gunakan Password yang Anda buat tadi."
+echo "--------------------------------------------------"
