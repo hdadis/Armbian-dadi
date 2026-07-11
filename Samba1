@@ -84,6 +84,8 @@ cat <<EOT >> "$SAMBA_CONF"
    read only = no
    force create mode = 0777
    force directory mode = 0777
+   valid users = dadi
+   force user = dadi
    public = no
 EOT
 
