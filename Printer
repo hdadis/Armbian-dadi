@@ -13,7 +13,7 @@ sudo apt install sane sane-utils simple-scan xsane nmap netcat-openbsd
 sudo add-apt-repository ppa:thierry-f/fork-michael-gruz
 sudo apt install sane-backends
 sudo apt install sane-frontends
-sudo nmap 192.168.18.21
+sudo nmap 192.168.18.2
 sudo apt install kmod-usb-printer p910nd luci-app-p910ndkmod-usb-printer
 sudo systemctl start cups
 sudo systemctl enable cups
