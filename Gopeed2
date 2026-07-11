@@ -16,7 +16,7 @@ cd ~/gopeed
 sudo wget -O docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Gopeed
 docker-compose up -d
 
-echo "[+] Compose"
+echo "Compose"
 cd ~/gopeed
 docker-compose up -d
 
