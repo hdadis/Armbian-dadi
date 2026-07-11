@@ -15,10 +15,13 @@ sudo ntfsfix /dev/sda1
 sudo gedit fstab
 mkdir /mnt/External
 mount /dev/sda1 /mnt/External
-echo "Menginstal aplikasi..."
-sudo wget -O /etc/fstab https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Drive
+DRIVE_CONF="/etc/fstab"
+cp $DRIVE_CONF "$DRIVE_CONF.bak"
+echo "[+] Menulis konfigurasi DRIVE ke FSTAB..."
+cat <<EOT >> $DRIVE_CONF
 UUID="EAFE72BDFE72819D" /mnt/External    ntfs-3g   defaults,nofail,noatime  0  2
 UUID="6CFC6F3FFC6F02A6" /mnt/External    ntfs-3g   defaults,nofail,noatime  0  2
+EOT
 sudo systemctl daemon-reload
 sudo mount -a
 
