@@ -42,8 +42,7 @@ sudo killall cupsd
 nano /etc/sane.d/saned.conf
 nano /etc/cups/cupsd.conf
 echo "Menginstal aplikasi Saned"
-sudo wget -O /etc/cups/cupsd.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Saned
-nano /etc/sane.d/saned.conf
+sudo wget -O /etc/default/saned https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Saned
 echo "Menginstal aplikasi Jetdirect"
 sudo wget -O /usr/local/bin/jetdirect.sh https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Jetdirect
 sudo chmod +x /usr/local/bin/jetdirect.sh
