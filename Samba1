@@ -88,6 +88,8 @@ cat <<EOT >> "$SAMBA_CONF"
 EOT
 
 echo "🔄 6. Me-restart layanan Samba..."
+sudo smbpasswd -a dadi
+sudo smbpasswd -e dadi
 systemctl restart smbd
 systemctl enable smbd
 
