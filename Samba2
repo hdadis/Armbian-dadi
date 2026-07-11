@@ -103,7 +103,7 @@ cat <<EOT >> $SMB_CONF
 # ==========================================================
 # Konfigurasi Custom Network Share - Terproteksi Password
 # ==========================================================
-[Secure-USB-Share]
+[External]
    comment = External
    path = $MOUNT_POINT
    browseable = yes
@@ -127,8 +127,8 @@ echo " IP Address Server Anda saat ini:"
 hostname -I | awk '{print $1}'
 echo ""
 echo " Cara Mengakses dari Client:"
-echo " - Windows: WIn + R -> \\\\<IP_SERVER>\\Secure-USB-Share"
-echo " - Mac/Linux: smb://<IP_SERVER>/Secure-USB-Share"
+echo " - Windows: WIn + R -> \\\\<IP_SERVER>\\External"
+echo " - Mac/Linux: smb://<IP_SERVER>/External"
 echo " - Gunakan Username: $SHARE_USER"
 echo " - Gunakan Password yang Anda buat tadi."
 echo "--------------------------------------------------"
