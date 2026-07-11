@@ -10,7 +10,7 @@ echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 apt install docker-compose
 curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
+sudo sh get-docker.shs
 mkdir -p ~/lightnvr && cd ~/lightnvr
 cd ~/lightnvr
 sudo wget -O docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/CCTV
