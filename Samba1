@@ -1,0 +1,98 @@
+#!/bin/bash
+
+# ==============================================================================
+# Script Name   : install_samba_usb.sh
+# Description   : Otomatisasi Instalasi Samba & Auto-mount USB Share
+# Author        : [DADI]
+# Date          : 2026
+# ==============================================================================
+
+# Pastikan skrip dijalankan sebagai root/sudo
+if [ "$EUID" -ne 0 ]; then
+  echo "⚠️ Harap jalankan skrip ini dengan hak akses sudo/root!"
+  exit 1
+fi
+
+echo "🔄 1. Memperbarui package list dan menginstal Samba..."
+apt install -y samba samba-common-bin
+
+echo "🔍 2. Mendeteksi penyimpanan USB..."
+# Mencari partisi penyimpanan eksternal (biasanya sdX1, sdX2, dsb. selain disk utama)
+# Menggunakan lsblk untuk memfilter disk yang bertipe partisi dan bukan drive sistem utama jika memungkinkan
+USB_PART=$(lsblk -lo NAME,TYPE,FSTYPE,MOUNTPOINT | grep -E "part" | grep -vE "(/|/boot|/boot/efi)$" | awk '{print $1}' | head -n 1)
+
+if [ -z "$USB_PART" ]; then
+  echo "❌ Tidak ada USB drive atau partisi eksternal kosong yang terdeteksi!"
+  echo "💡 Silakan colokkan USB Anda terlebih dahulu, lalu jalankan ulang skrip."
+  exit 1
+fi
+
+USB_DEV="/dev/$USB_PART"
+MOUNT_POINT="/mnt/External"
+echo "✅ Terdeteksi device: $USB_DEV"
+
+echo "📂 3. Membuat Mount Point di $MOUNT_POINT..."
+mkdir -p "$MOUNT_POINT"
+
+# Mendapatkan UUID untuk setup fstab yang lebih stabil jika restart
+UUID=$(blkid -o value -s UUID "$USB_DEV")
+FSTYPE=$(blkid -o value -s TYPE "$USB_DEV")
+
+if [ -z "$UUID" ]; then
+  echo "❌ Gagal mendapatkan UUID dari $USB_DEV"
+  exit 1
+fi
+
+echo "📌 4. Mengonfigurasi Auto-mount via /etc/fstab..."
+# Backup fstab sebelum diubah
+cp /etc/fstab /etc/fstab.bak
+
+# Cek apakah UUID sudah ada di fstab agar tidak duplikat
+if ! grep -q "$UUID" /etc/fstab; then
+  # Pengaturan mounting disesuaikan dengan tipe file system (NTFS/ext4/vfat)
+  if [ "$FSTYPE" == "ntfs" ] || [ "$FSTYPE" == "vfat" ]; then
+    echo "UUID=$UUID $MOUNT_POINT $FSTYPE defaults,uid=1000,gid=1000,umask=000 0 0" >> /etc/etc/fstab
+  else
+    echo "UUID=$UUID $MOUNT_POINT $FSTYPE defaults,nofail 0 2" >> /etc/fstab
+  fi
+  echo "✅ Konfigurasi fstab berhasil ditambahkan."
+else
+  echo "ℹ️ UUID $UUID sudah terdaftar di /etc/fstab."
+fi
+
+# Eksekusi mount
+mount -a
+chmod -R 777 "$MOUNT_POINT"
+
+echo "⚙️ 5. Mengonfigurasi Samba Server..."
+SAMBA_CONF="/etc/samba/smb.conf"
+
+# Backup konfigurasi bawaan
+if [ ! -f "${SAMBA_CONF}.bak" ]; then
+  cp "$SAMBA_CONF" "${SAMBA_CONF}.bak"
+fi
+
+# Menambahkan konfigurasi Share Folder USB di akhir file
+cat <<EOT >> "$SAMBA_CONF"
+
+[USB_Share]
+   comment = External
+   path = $MOUNT_POINT
+   browseable = yes
+   writable = yes
+   guest ok = no
+   read only = no
+   force create mode = 0777
+   force directory mode = 0777
+   public = no
+EOT
+
+echo "🔄 6. Me-restart layanan Samba..."
+systemctl restart smbd
+systemctl enable smbd
+
+echo "🎉 Proses Selesai!"
+echo "--------------------------------------------------"
+echo "📂 Mount Point : $MOUNT_POINT"
+echo "🖥️ Samba Share : \\[IP_ADDRESS_SERVER]\USB_Share"
+echo "--------------------------------------------------"
