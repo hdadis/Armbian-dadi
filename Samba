@@ -20,6 +20,8 @@ sudo chown dadi:sambashare /samba/dadi
 sudo chmod 2770 /samba/dadi
 sudo smbpasswd -a dadi
 sudo smbpasswd -e dadi
+sudo chmod -R 777 //mnt/External
+sudo chown -R dadi:sambashare /mnt/External
 sudo service smbd restart
 sudo testparm
 
