@@ -1,0 +1,116 @@
+#!/bin/bash
+
+# ==============================================================================
+# Script Name: SAMBA
+# Description: Otomatisasi Samba - Deteksi USB & Proteksi Password Privat (No Guest)
+# ==============================================================================
+
+# Pastikan dijalankan sebagai root/sudo
+if [ "$EUID" -ne 0 ]; then
+  echo "[-] Gagal: Harap jalankan skrip ini dengan sudo (contoh: sudo ./setup_samba.sh)"
+  exit 1
+fi
+
+echo "[+] Memulai setup Samba Private Server..."
+echo "--------------------------------------------------"
+
+# 1. Instalasi Samba
+echo "[+] Memperbarui repositori dan menginstal paket Samba..."
+apt update && apt install -y samba samba-common-bin
+
+# 2. Deteksi USB Baru secara Dinamis
+echo "[+] Mendeteksi penyimpanan USB baru..."
+USB_DEV=$(lsblk -d -o NAME,TRAN | grep usb | awk '{print $1}' | head -n 1)
+
+if [ -z "$USB_DEV" ]; then
+    echo "[-] USB eksternal murni tidak terdeteksi via interface USB."
+    echo "    Mencoba mencari partisi non-sistem sekunder..."
+    USB_PART=$(lsblk -ln -o NAME,MOUNTPOINT | grep -v '^sda' | awk '$2=="" {print $1}' | head -n 1)
+else
+    USB_PART=$(lsblk -ln -o NAME /dev/$USB_DEV | grep -E "[0-9]$" | head -n 1)
+fi
+
+if [ -z "$USB_PART" ]; then
+    echo "[-] ERROR: USB Drive tidak ditemukan. Silakan colok USB Anda dan jalankan ulang skrip."
+    exit 1
+fi
+
+USB_PATH="/dev/usb/$USB_PART"
+MOUNT_POINT="/mnt/External"
+
+# 3. Membuat Folder Mount & Mounting Storage
+mkdir -p $MOUNT_POINT
+
+if ! mountpoint -q $MOUNT_POINT; then
+    echo "[+] Melakukan mounting $USB_PATH ke $MOUNT_POINT..."
+    mount -t auto $USB_PATH $MOUNT_POINT
+fi
+
+# Konfigurasi Auto-Mount permanen saat reboot menggunakan UUID
+UUID_USB=$(blkid -s UUID -o value $USB_PATH)
+if [ ! -z "$UUID_USB" ]; then
+    if ! grep -q "$UUID_USB" /etc/fstab; then
+        echo "UUID=$UUID_USB $MOUNT_POINT auto nosuid,nodev,nofail 0 2" >> /etc/fstab
+        echo "[+] Berhasil mendaftarkan USB ke /etc/fstab menggunakan UUID."
+    fi
+fi
+
+# 4. Pengaturan User Private & Keamanan Folder
+PRIVATE_USER="dadi"
+
+# Buat user system tanpa hak login ke mesin Linux (demi keamanan)
+if ! id "$PRIVATE_USER" &>/dev/null; then
+    useradd -M -s /sbin/nologin $PRIVATE_USER
+fi
+
+# Kunci hak akses lokal direktori hanya untuk user tersebut
+chown -R $PRIVATE_USER:nogroup $MOUNT_POINT
+chmod -R 700 $MOUNT_POINT
+
+# 5. Pembuatan Password Privat
+echo "--------------------------------------------------"
+echo "[!] WAJIB: Buat password privat untuk akses folder Samba Anda."
+echo "    Password ini yang digunakan saat login dari Windows/Mac."
+echo "--------------------------------------------------"
+smbpasswd -a $PRIVATE_USER
+
+# 6. Konfigurasi File Samba (smb.conf)
+SMB_CONF="/etc/samba/smb.conf"
+cp $SMB_CONF "$SMB_CONF.bak"
+
+echo "[+] Menulis konfigurasi penguncian private ke smb.conf..."
+cat <<EOT >> $SMB_CONF
+
+# ==========================================================
+# KONFIGURASI SAMBA PRIVATE - TERPROTEKSI PASSWORD MUTLAK
+# ==========================================================
+[Private-USB]
+   comment = Folder Private Terproteksi Password
+   path = $MOUNT_POINT
+   browseable = yes
+   read only = no
+   
+   # Keamanan Ketat: Menolak Tamu & Hanya Mengizinkan User Terdaftar
+   guest ok = no
+   public = no
+   valid users = $PRIVATE_USER
+   
+   # Memaksa hak akses file baru tetap private
+   force user = $PRIVATE_USER
+   create mask = 0600
+   directory mask = 0700
+EOT
+
+# 7. Restart Layanan
+echo "[+] Menerapkan perubahan dan me-restart service Samba..."
+systemctl restart smbd
+systemctl enable smbd
+
+echo "--------------------------------------------------"
+echo "[+] KONFIGURASI SELESAI!"
+echo "--------------------------------------------------"
+echo " IP Address Server: $(hostname -I | awk '{print $1}')"
+echo " Nama Folder Share: Private-USB"
+echo " Username Kredensial: $PRIVATE_USER"
+echo " Password: (Sesuai password privat yang Anda buat di atas)"
+echo "--------------------------------------------------"
