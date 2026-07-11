@@ -16,8 +16,7 @@ cd ~/gopeed
 sudo wget -O docker-compose.yml https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Gopeed
 docker-compose up -d
 
-echo "Menginstal aplikasi..."
-# Ganti dengan paket yang ingin Anda install, contoh:
+echo "[+] Compose"
 cd ~/gopeed
 docker-compose up -d
 
