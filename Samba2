@@ -16,8 +16,8 @@ echo "--------------------------------------------------"
 
 # 1. Update system dan install Samba
 echo "[+] Memperbarui package list dan menginstal Samba..."
-apt install -y samba samba-common-bin
-sudo apt install samba cifs-utils smbclient -y
+yes | apt install -y samba samba-common-bin
+yes | sudo apt install -y samba cifs-utils smbclient -y
 mkdir -p /home/armbian/sambashare
 chmod -R 777 /home/armbian/sambashare
 sudo mkdir /samba/
