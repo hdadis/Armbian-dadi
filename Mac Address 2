@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+sudo wget -O /etc/network/interfaces.d/* https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Mac_IP%2021
+
+echo "Instalasi selesai!"
