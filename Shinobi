@@ -13,7 +13,7 @@ git clone https://gitlab.com/Shinobi-Systems/Shinobi.git Shinobi
 cd Shinobi
 sudo chmod +x INSTALL/ubuntu.sh
 sudo INSTALL/ubuntu.sh
-cd /root/Shinobi
+cd Shinobi
 npm install --loglevel verbose
 node -v
 npm -v
