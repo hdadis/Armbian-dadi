@@ -31,5 +31,4 @@ pm2 flush
 pm2 restart camera
 pm2 logs
 
-
 echo "Instalasi selesai!"
