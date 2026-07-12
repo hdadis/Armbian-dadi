@@ -8,13 +8,13 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt-get install cups printer-driver-gutenprint p910nd hplip printer-driver-foo2zjs
-sudo apt install sane sane-utils simple-scan xsane nmap netcat-openbsd
-sudo add-apt-repository ppa:thierry-f/fork-michael-gruz
-sudo apt install sane-backends
-sudo apt install sane-frontends
+yes | sudo apt-get install -y cups printer-driver-gutenprint p910nd hplip printer-driver-foo2zjs
+yes | sudo apt install -y sane sane-utils simple-scan xsane nmap netcat-openbsd
+yes | sudo add-apt-repository ppa:thierry-f/fork-michael-gruz
+yes | sudo apt install -y sane-backends
+yes | sudo apt install -y sane-frontends
 sudo nmap 192.168.18.2
-sudo apt install kmod-usb-printer p910nd luci-app-p910ndkmod-usb-printer
+yes | sudo apt install -y kmod-usb-printer p910nd luci-app-p910ndkmod-usb-printer
 sudo systemctl start cups
 sudo systemctl enable cups
 sudo systemctl restart cups
@@ -22,10 +22,10 @@ sudo service cups restart
 sudo systemctl status cups
 sudo systemctl enable cups.service
 sudo systemctl status cups.service
-sudo apt install scangearmp2
-sudo apt install printer-driver-cnijfilter-mg4200
-sudo apt install cnijfilter2
-sudo apt install avahi-daemon
+yes | sudo apt install -y scangearmp2
+yes | sudo apt install -y printer-driver-cnijfilter-mg4200
+yes | sudo apt install -y cnijfilter2
+yes | sudo apt install -y avahi-daemon
 sudo systemctl start avahi-daemon
 sudo useradd -g lpadmin cupsadmin
 sudo usermod -a -G lpadmin dadi
