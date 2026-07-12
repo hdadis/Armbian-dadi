@@ -13,30 +13,24 @@ git clone https://gitlab.com/Shinobi-Systems/Shinobi.git Shinobi
 cd Shinobi
 sudo chmod +x INSTALL/ubuntu.sh
 sudo INSTALL/ubuntu.sh
-expect {
-    # Do you want to Install MariaDB? Choose No if you already have it.
-    -re "Shinobi - Do you want to Install MariaDB? Choose No if you already have it.*" {
-        send "y\r"
-        exp_continue
-    }
-    # Password for root SQL user, If you are installing SQL now then you may put anything:
-    -re "Password for root SQL user, If you are installing SQL now then you may put anything:.*" {
-        send "980Abc\r"
-        exp_continue
-    }
-    # Shinobi - Database Installation
-    -re "Shinobi - Database Installation.*" {
-        send "y\r"
-        exp_continue
-    }
-    # Shinobi - Start Shinobi and set to start on boot?
-    -re "Shinobi - Start Shinobi and set to start on boot?.*" {
-        send "y\r"
-        exp_continue
-    }
-    # Menangani akhir dari proses script
-    eof
-}
-EOF
+cd /home/Shinobi
+npm install --loglevel verbose
+node -v
+npm -v
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm use 22
+npm i npm -g
+cd /home/Shinobi
+rm -rf node_modules package-lock.json
+npm cache clean --force
+npm install --legacy-peer-deps
+sudo apt install build-essential python3 libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev -y
+sh UPDATE.sh
+pm2 flush
+pm2 restart camera
+pm2 logs
+
 
 echo "Instalasi selesai!"
