@@ -9,19 +9,13 @@ fi
 # 2. Pastikan paket 'expect' dan 'git' sudah terinstal
 echo "Memeriksa dan menginstal dependensi awal..."
 sudo apt update
-sudo apt install git expect -y
-
-# 3. Clone dan masuk ke folder Shinobi
-if [ ! -d "Shinobi" ]; then
-  echo "Mengkloning repositori Shinobi..."
-  git clone https://gitlab.com/Shinobi-Systems/Shinobi.git Shinobi
-fi
-cd Shinobi || exit
+sudo apt install git -y
+git clone https://gitlab.com/Shinobi-Systems/Shinobi.git Shinobi
+cd Shinobi
 sudo chmod +x INSTALL/ubuntu.sh
+sudo INSTALL/ubuntu.sh
 
-echo "Memulai instalasi otomatis dengan Expect..."
-
-# 4. Bagian ini yang menjalankan perintah otomatisnya
+# 3. Bagian ini yang menjalankan perintah otomatisnya
 images_tags=$(expect << 'EOF'
 set timeout -1
 spawn sudo INSTALL/ubuntu.sh
