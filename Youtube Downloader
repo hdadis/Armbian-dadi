@@ -1,3 +1,14 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
 sudo apt install python3 python3-pip ffmpeg wget -y
 sudo wget https://github.com -O /mnt/External/Downloads/IDM/Music
 sudo chmod a+rx /mnt/External/Downloads/IDM/Music
+
+echo "Instalasi selesai!"
