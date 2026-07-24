@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install curl gnupg apt-transport-https -y
+curl https://jellyfin.org | sudo bash
+sudo systemctl status jellyfin
+sudo systemctl start jellyfin
+sudo systemctl enable jellyfin
+sudo chown -R jellyfin:jellyfin /path/to/your/media
+sudo chmod -R 755 /path/to/your/media
+
+echo "Instalasi selesai! untuk PORT Jellyfin di 8096"
