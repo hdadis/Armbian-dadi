@@ -24,7 +24,7 @@ UUID="6CFC6F3FFC6F02A6" /mnt/External    ntfs-3g   defaults,nofail,noatime  0  2
 EOT
 sudo systemctl daemon-reload
 sudo mount -a
-wget https://raw.githubusercontent.com/tankibaj/speedtest/master/speedtest.sh && sudo bash speedtest.sh && speedtest
+curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
 speedtest
 
 echo "Instalasi selesai!"
