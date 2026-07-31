@@ -25,6 +25,6 @@ EOT
 sudo systemctl daemon-reload
 sudo mount -a
 wget https://raw.githubusercontent.com/tankibaj/speedtest/master/speedtest.sh && sudo bash speedtest.sh && speedtest
-speedtest -L
+speedtest
 
 echo "Instalasi selesai!"
