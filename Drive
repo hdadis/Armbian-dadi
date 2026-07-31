@@ -29,4 +29,5 @@ curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.
 sudo apt install speedtest
 speedtest
 
+
 echo "Instalasi selesai!"
