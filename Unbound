@@ -13,6 +13,7 @@ dig -v
 
 echo "Copy Configuration Unbound..."
 sudo wget -O /etc/unbound/unbound.conf.d/unboundadguard.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound
+sudo wget -O /etc/unbound/unboundadguard.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound
 
 sudo sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 sudo systemctl restart systemd-resolved
