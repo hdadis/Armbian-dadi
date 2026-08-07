@@ -13,8 +13,8 @@ sudo apt install unbound dnsutils net-tools tcpdump -y
 dig -v
 
 echo "Copy Configuration Unbound..."
-sudo wget -O /etc/unbound/unbound.conf.d/unboundadguard.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound2
-sudo wget -O /etc/unbound/unboundadguard.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound2
+sudo wget -O /etc/unbound/unbound.conf.d/unbound.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound2
+sudo wget -O /etc/unbound/unbound.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound2
 
 sudo sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 sudo systemctl restart systemd-resolved
