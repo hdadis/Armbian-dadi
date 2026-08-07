@@ -8,6 +8,7 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
+yes | sudo apt update -y
 sudo apt install unbound dnsutils net-tools tcpdump -y
 dig -v
 
