@@ -8,7 +8,7 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt install unbound dnsutils -y
+sudo apt install unbound dnsutils net-tools -y
 dig -v
 
 echo "Copy Configuration Unbound..."
