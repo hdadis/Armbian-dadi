@@ -30,7 +30,7 @@ netstat -anput
 ip addr
 tcpdump -^C
 whereis tcpdump
-usr/sbin/tcpdump -ni enp0s3 udp port 53
+/usr/bin/tcpdump -ni enp0s3 udp port 53
 
 dig somebadsites.com @127.0.0.1 -p 5335
 dig fail2000.dnssec-failed.org @127.0.0.1 -p 5335
