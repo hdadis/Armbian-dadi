@@ -42,6 +42,5 @@ dig sigok.verteiltesysteme.net @127.0.0.1
 dig sigfail.verteiltesysteme.net @127.0.0.1
 dig dnssec-failed.org @127.0.0.1 -p 5335
 
-dig @192.168.18.9 somebadsites.com
 
 echo "Instalasi selesai!"
