@@ -9,18 +9,23 @@ fi
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 yes | sudo apt update -y
-sudo apt install unbound dnsutils net-tools tcpdump -y
+sudo apt install unbound unbound-anchor dnsutils net-tools tcpdump -y
 dig -v
 
 echo "Copy Configuration Unbound..."
 sudo wget -O /etc/unbound/unbound.conf.d/unbound.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound3
 sudo wget -O /etc/systemd/system/apt-auto-update.service https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound4
+sudo wget -O /usr/local/sbin/apt-auto-update.sh https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound5
 
 sudo sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 sudo systemctl restart systemd-resolved
 sudo wget https://internic.net -O /var/lib/unbound/root.hints
 sudo wget https://www.internic.net/domain/named.root -O /var/lib/unbound/root.hints
+sudo chmod +x /usr/local/sbin/apt-auto-update.sh
 sudo unbound-checkconf
+
+sudo unbound-anchor -a /etc/unbound/root.key
+
 
 sudo systemctl restart unbound
 sudo systemctl enable unbound
@@ -33,12 +38,9 @@ tcpdump -^C
 whereis tcpdump
 /usr/bin/tcpdump -ni enp0s3 udp port 53
 
-dig somebadsites.com @127.0.0.1 -p 5335
-dig fail2000.dnssec-failed.org @127.0.0.1 -p 5335
+dig sigok.verteiltesysteme.net @127.0.0.1
+dig sigfail.verteiltesysteme.net @127.0.0.1
 dig dnssec-failed.org @127.0.0.1 -p 5335
-
-tcpdump -ni ^C
-usr/sbin/tcpdump -ni enp0s3 udp port 53
 
 dig @192.168.18.9 somebadsites.com
 
