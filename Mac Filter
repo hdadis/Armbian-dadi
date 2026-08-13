@@ -48,8 +48,8 @@ sudo iptables -A MAC_ALLOWLIST -m mac --mac-source 48:88:CA:69:3D:B2 -j ACCEPT
 sudo iptables -A MAC_ALLOWLIST -m mac --mac-source 50:0f:f5:90:7e:a8 -j ACCEPT
 sudo iptables -A MAC_ALLOWLIST -m mac --mac-source 74:51:BA:0F:2E:E1 -j ACCEPT
 sudo iptables -A MAC_ALLOWLIST -m mac --mac-source 00:E0:4C:68:40:43 -j ACCEPT
-sudo iptables -A MAC_ALLOWLIST -m mac --mac-source F2:5A:F9:24:1D:2E -j ACCEPT
-sudo iptables -A MAC_ALLOWLIST -m mac --mac-source F2:5A:F9:24:1D:22 -j ACCEPT
+sudo iptables -A MAC_ALLOWLIST -m mac --mac-source 7e:90:45:5d:19:e2 -j ACCEPT
+sudo iptables -A MAC_ALLOWLIST -m mac --mac-source 00:15:18:01:81:31 -j ACCEPT
 sudo iptables -A MAC_ALLOWLIST -j DROP
 sudo iptables -A INPUT -i eth0 -j MAC_ALLOWLIST
 sudo netfilter-persistent save
