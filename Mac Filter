@@ -14,6 +14,7 @@ sudo systemctl stop systemd-resolved.service
 sudo systemctl stop systemd-resolved
 sudo systemctl disable systemd-resolved
 sudo systemctl restart systemd-resolved
+sudo apt update 
 sudo apt install iptables-persistent hostapd dnsmasq
 sudo iptables -N MAC_ALLOWLIST
 sudo iptables -A MAC_ALLOWLIST -m mac --mac-source C0:E3:FB:1A:E5:7F -j ACCEPT
