@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install iptables-persistent hostapd dnsmasq
+sudo iptables -N MAC_ALLOWLIST
+sudo iptables -A INPUT -m mac --mac-source C0:E3:FB:1A:E5:7F -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 9C:6B:00:15:1E:2F -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 78:53:33:43:29:DC -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 58:20:71:EC:8A:28 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source C8:90:8A:71:CE:EB -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 4C:BB:6F:5B:64:BC -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 7C:70:DB:2B:35:B3 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source C4:23:60:99:FB:5B -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source E8:A7:2F:0A:03:3E -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source FC:9D:05:38:0A:2E -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source AC:A7:F1:33:3C:4E -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source F0:A7:31:36:78:DB -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 30:de:4b:a8:4d:44 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 30:de:4b:a8:55:5f -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 98:25:4A:CC:15:07 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 30:DE:4B:81:67:95 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 38:2C:E5:0E:52:F5 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 8C:87:D0:19:E9:7D -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 3C:97:0E:E8:B6:7A -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 00:15:18:01:81:31 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source CA:6D:02:81:16:C7 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 58:85:E9:71:05:CF -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 94:83:c4:2c:ae:7c -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source CC:4D:75:96:B3:B8 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 44:46:87:80:6C:B1 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source D8:5D:E2:E6:C6:D1 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 40:F0:2F:D5:F8:81 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 50:E4:78:07:4A:10 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 30:8D:99:15:09:0E -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source e0:51:d8:18:ce:f8 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source D0:03:DF:11:7A:B5 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 74:23:44:E4:6E:86 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 10:2C:6B:7B:77:90 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 10:27:F5:44:60:C0 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 48:88:CA:69:3D:B2 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 50:0f:f5:90:7e:a8 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 74:51:BA:0F:2E:E1 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 00:E0:4C:68:40:43 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source F2:5A:F9:24:1D:2E -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 7e:90:45:5d:19:e2 -j ACCEPT
+sudo iptables -A INPUT -m mac --mac-source 00:15:18:01:81:31 -j ACCEPT
+sudo iptables -A INPUT -j DROP
+sudo netfilter-persistent save
+nano /etc/iptables/rules.v4
+
+
+
+echo "Instalasi selesai!"
