@@ -8,6 +8,12 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
+sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+sudo sed -i 's/#DNSStubListener=yes/#DNSStubListener=no/' /etc/systemd/resolved.conf
+sudo systemctl stop systemd-resolved.service
+sudo systemctl stop systemd-resolved
+sudo systemctl disable systemd-resolved
+sudo systemctl restart systemd-resolved
 sudo apt install iptables-persistent hostapd dnsmasq
 sudo iptables -N MAC_ALLOWLIST
 sudo iptables -A MAC_ALLOWLIST -m mac --mac-source C0:E3:FB:1A:E5:7F -j ACCEPT
