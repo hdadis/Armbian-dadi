@@ -6,17 +6,17 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo "Menginstal aplikasi..."
+echo "Menginstall aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Drive)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Adguard)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Mac%20Filter%202)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Samba2)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/MOCP)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
 sudo cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Printer)"
-
-
-
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Shinobi)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Fix_Shinobi)"
 
 echo "Instalasi selesai!"
