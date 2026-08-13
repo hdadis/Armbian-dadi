@@ -57,7 +57,6 @@ sudo iptables -A INPUT -m mac --mac-source 74:51:BA:0F:2E:E1 -j ACCEPT
 sudo iptables -A INPUT -m mac --mac-source 00:E0:4C:68:40:43 -j ACCEPT
 sudo iptables -A INPUT -m mac --mac-source F2:5A:F9:24:1D:2E -j ACCEPT
 sudo iptables -A INPUT -m mac --mac-source 7e:90:45:5d:19:e2 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 00:15:18:01:81:31 -j ACCEPT
 sudo iptables -A INPUT -j DROP
 sudo netfilter-persistent save
 nano /etc/iptables/rules.v4
