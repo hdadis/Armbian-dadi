@@ -8,7 +8,6 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-yes | sudo apt update
 yes | sudo apt-get install -y ntfsprogs
 yes | sudo apt-get install -y ntfs-3g
 sudo ntfsfix /dev/sda1
