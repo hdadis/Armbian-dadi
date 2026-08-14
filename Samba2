@@ -99,8 +99,8 @@ echo "--------------------------------------------------"
 echo "[!] SILAKAN MASUKKAN PASSWORD PRIVAT UNTUK AKSES SAMBA/USER:"
 echo "--------------------------------------------------"
 # Memicu input password interaktif untuk user Samba
-smbpasswd -a $SHARE_USER
-smbpasswd -e $SHARE_USER
+smbpasswd -a dadi
+smbpasswd -e dadi
 
 # 5. Konfigurasi File smb.conf
 SMB_CONF="/etc/samba/smb.conf"
@@ -123,7 +123,7 @@ cat <<EOT >> $SMB_CONF
    guest ok = no
    valid users = $SHARE_USER
    force user = $SHARE_USER
-   create mask = 0660
+   create mask = 0770
    directory mask = 0770
 EOT
 
