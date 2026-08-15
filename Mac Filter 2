@@ -8,7 +8,7 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt install iptables-persistent
+yes | sudo apt install -y iptables-persistent
 sudo iptables -N MAC_ALLOWLIST
 sudo iptables -A INPUT -m mac --mac-source C0:E3:FB:1A:E5:7F -j ACCEPT
 sudo iptables -A INPUT -m mac --mac-source 9C:6B:00:15:1E:2F -j ACCEPT
