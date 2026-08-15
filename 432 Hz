@@ -33,10 +33,16 @@ resampler {
     # Additional SoX parameters can go here
 }
 sudo systemctl restart mpd
-sudo nano /etc/pulse/daemon.conf
+
+DAEMON_CONF="/etc/pulse/daemon.confb"
+cp $DAEMON_CONF "$DAEMON_CONF.bak"
+echo "[+] Menulis konfigurasi DAEMON_CONF..."
+cat <<EOT >> $DAEMON_CONF
+
 default-sample-format = s24le
 default-sample-rate = 192000
 resample-method = soxr-vhq
 pulseaudio -k && pulseaudio -D
+EOT
 
 echo "Instalasi selesai!"
