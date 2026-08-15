@@ -10,9 +10,9 @@ echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 sudo systemctl daemon-reload
 sudo mount -a
-sudo apt install -y curl
+yes | sudo apt install -y curl
 curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
-sudo apt install speedtest
+yes | sudo apt install -y speedtest
 speedtest
 
 
