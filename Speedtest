@@ -1,0 +1,19 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo systemctl daemon-reload
+sudo mount -a
+sudo apt install -y curl
+curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
+sudo apt install speedtest
+speedtest
+
+
+echo "Instalasi selesai!"
