@@ -43,10 +43,10 @@ cp $DAEMON_CONF "$DAEMON_CONF.bak"
 echo "[+] Menulis konfigurasi DAEMON_CONF..."
 cat <<EOT >> $DAEMON_CONF
 
-default-sample-format = s24le
-default-sample-rate = 192000
-resample-method = soxr-vhq
-pulseaudio -k && pulseaudio -D
+; default-sample-format = s24le
+; default-sample-rate = 192000
+; resample-method = soxr-vhq
+; pulseaudio -k && pulseaudio -D
 EOT
 
 echo "Instalasi selesai!"
