@@ -9,7 +9,6 @@ fi
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 sudo apt install mpd
-sudo nano /etc/mpd.conf
 #UNDER THE AUDIO OUTPUT#
 
 sudo sed -i 's/# Audio Output ################################################################
@@ -36,6 +35,7 @@ resampler {
     quality         "high"
     # Additional SoX parameters can go here
 }/g' /etc/mpd.conf
+sudo nano /etc/mpd.conf
 sudo systemctl restart mpd
 
 DAEMON_CONF="/etc/pulse/daemon.conf"
