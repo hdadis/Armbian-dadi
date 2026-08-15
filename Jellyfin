@@ -8,7 +8,7 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt install curl gnupg apt-transport-https -y
+yes | sudo apt install curl gnupg apt-transport-https -y
 curl https://jellyfin.org | sudo bash
 sudo systemctl status jellyfin
 sudo systemctl start jellyfin
