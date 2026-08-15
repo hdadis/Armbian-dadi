@@ -13,7 +13,8 @@ sudo nano /etc/mpd.conf
 #UNDER THE AUDIO OUTPUT#
 
 sudo sed -i 's/# Audio Output ################################################################
-#/
+#/# Audio Output ################################################################
+#
 audio_output {
     type            "alsa"  # or "pulse" depending on your setup
     name            "432Hz Output"
