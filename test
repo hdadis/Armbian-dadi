@@ -10,39 +10,34 @@ echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 sudo apt install mpd
 #UNDER THE AUDIO OUTPUT#
-
-sudo tee -a /etc/mpd.conf > /dev/null << 'EOF'
-
-# Audio Output ################################################################
-#
-sudo sed -i 's/# Audio Output ################################################################
-#/# Audio Output ################################################################
-#
-audio_output {
-    type            "alsa"  # or "pulse" depending on your setup
-    name            "432Hz Output"
-    auto_resample   "no"
-    format          "44100:16:2"
-    mixer_type      "software"
+sudo awk '
+/# Audio Output ################################################################/ {
+    print $0
+    print "#"
+    print "audio_output {"
+    print "    type            \"alsa\"  # or \"pulse\" depending on your setup"
+    print "    name            \"432Hz Output\""
+    print "    auto_resample   \"no\""
+    print "    "
+    print "    # Enable SoX and apply the pitch shift"
+    print "    # You can specify quality parameters if needed (e.g., -v -b 24)"
+    print "    format          \"44100:16:2\""
+    print "    mixer_type      \"software\""
+    print "    "
+    print "    # Use SoX for the pitch adjustment"
+    print "    # Note: Modern MPD versions require the sox plugin"
+    print "    # Alternatively, you can use the SoundTouch library if available in your build"
+    print "}"
+    print ""
+    print "# Define the resampler using SoX"
+    print "resampler {"
+    print "    plugin          \"sox\""
+    print "    quality         \"high\""
+    print "    # Additional SoX parameters can go here"
+    print "}"
+    next
 }
-resampler {
-    plugin          "sox"
-    quality         "high"
-}/g' /etc/mpd.conf
-EOF
-
-sudo nano /etc/mpd.conf
-sudo systemctl restart mpd
-
-DAEMON_CONF="/etc/pulse/daemon.conf"
-cp $DAEMON_CONF "$DAEMON_CONF.bak"
-echo "[+] Menulis konfigurasi DAEMON_CONF..."
-cat <<EOT >> $DAEMON_CONF
-
-; default-sample-format = s24le
-; default-sample-rate = 192000
-; resample-method = soxr-vhq
-; pulseaudio -k && pulseaudio -D
-EOT
+{ print }
+' /etc/mpd.conf > /tmp/mpd.conf.tmp && sudo mv /tmp/mpd.conf.tmp /etc/mpd.conf
 
 echo "Instalasi selesai!"
