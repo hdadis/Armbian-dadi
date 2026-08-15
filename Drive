@@ -8,9 +8,9 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt update -y
-sudo apt-get install -y ntfsprogs
-sudo apt-get install -y ntfs-3g
+yes | sudo apt update -y
+yes | sudo apt-get install -y ntfsprogs
+yes | sudo apt-get install -y ntfs-3g
 sudo ntfsfix /dev/sda1
 sudo gedit fstab
 mkdir /mnt/External
