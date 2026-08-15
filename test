@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menginstal aplikasi..."
+# Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt install mpd
+#UNDER THE AUDIO OUTPUT#
+
+sudo sed -i 's/# Audio Output ################################################################
+#/# Audio Output ################################################################
+#
+audio_output {
+    type            "alsa"  # or "pulse" depending on your setup
+    name            "432Hz Output"
+    auto_resample   "no"
+    
+    # Enable SoX and apply the pitch shift
+    # You can specify quality parameters if needed (e.g., -v -b 24)
+    format          "44100:16:2"
+    mixer_type      "software"
+    
+    # Use SoX for the pitch adjustment
+    # Note: Modern MPD versions require the sox plugin
+    # Alternatively, you can use the SoundTouch library if available in your build
+}
+
+# Define the resampler using SoX
+resampler {
+    plugin          "sox"
+    quality         "high"
+    # Additional SoX parameters can go here
+}/g' /etc/mpd.conf
+sudo nano /etc/mpd.conf
+sudo systemctl restart mpd
+
+DAEMON_CONF="/etc/pulse/daemon.conf"
+cp $DAEMON_CONF "$DAEMON_CONF.bak"
+echo "[+] Menulis konfigurasi DAEMON_CONF..."
+cat <<EOT >> $DAEMON_CONF
+
+; default-sample-format = s24le
+; default-sample-rate = 192000
+; resample-method = soxr-vhq
+; pulseaudio -k && pulseaudio -D
+EOT
+
+echo "Instalasi selesai!"
