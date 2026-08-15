@@ -8,8 +8,8 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-yes | sudo apt-get install -y ntfsprogs
-yes | sudo apt-get install -y ntfs-3g
+sudo apt-get install -y ntfsprogs
+sudo apt-get install -y ntfs-3g
 sudo ntfsfix /dev/sda1
 sudo gedit fstab
 mkdir /mnt/External
@@ -21,12 +21,6 @@ cat <<EOT >> $DRIVE_CONF
 UUID="EAFE72BDFE72819D" /mnt/External    ntfs-3g   defaults,nofail,noatime  0  2
 UUID="6CFC6F3FFC6F02A6" /mnt/External    ntfs-3g   defaults,nofail,noatime  0  2
 EOT
-sudo systemctl daemon-reload
-sudo mount -a
-sudo apt install -y curl
-curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
-sudo apt install speedtest
-speedtest
 
 
 echo "Instalasi selesai!"
