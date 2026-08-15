@@ -11,6 +11,9 @@ echo "Menginstal aplikasi..."
 sudo apt install mpd
 sudo nano /etc/mpd.conf
 #UNDER THE AUDIO OUTPUT#
+
+sudo sed -i 's/# Audio Output ################################################################
+#/
 audio_output {
     type            "alsa"  # or "pulse" depending on your setup
     name            "432Hz Output"
@@ -31,10 +34,10 @@ resampler {
     plugin          "sox"
     quality         "high"
     # Additional SoX parameters can go here
-}
+}/g' /etc/mpd.conf
 sudo systemctl restart mpd
 
-DAEMON_CONF="/etc/pulse/daemon.confb"
+DAEMON_CONF="/etc/pulse/daemon.conf"
 cp $DAEMON_CONF "$DAEMON_CONF.bak"
 echo "[+] Menulis konfigurasi DAEMON_CONF..."
 cat <<EOT >> $DAEMON_CONF
