@@ -8,7 +8,7 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt install git -y
+yes | sudo apt install git -y
 git clone https://gitlab.com/Shinobi-Systems/Shinobi.git Shinobi
 cd Shinobi
 sudo chmod +x INSTALL/ubuntu.sh
