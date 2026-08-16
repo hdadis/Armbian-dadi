@@ -39,6 +39,9 @@ sudo systemctl daemon-reload
 sudo systemctl start jetdirect
 sudo systemctl enable jetdirect
 sudo killall cupsd
+sudo sed -i 's/#192.168.0.0/#192.168.18.2/g' /etc/sane.d/saned.conf
+#192.168.18.0/29
+sudo sed -i 's/#192.168.0.1/29/#192.168.18.0/29/g' /etc/sane.d/saned.conf
 nano /etc/sane.d/saned.conf
 nano /etc/cups/cupsd.conf
 echo "Menginstal aplikasi Saned"
