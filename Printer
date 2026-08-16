@@ -30,9 +30,9 @@ sudo systemctl start avahi-daemon
 sudo useradd -g lpadmin cupsadmin
 sudo usermod -a -G lpadmin dadi
 sudo passwd cupsadmin
-980Abc
+
 sudo passwd dadi
-980Abc
+
 sudo cupsctl --remote-any
 sudo chmod +x /usr/local/bin/jetdirect.sh
 sudo systemctl daemon-reload
