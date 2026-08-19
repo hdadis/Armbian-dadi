@@ -1,0 +1,4 @@
+git clone https://github.com/alijayanet/cctv-monitoring.git
+cd cctv-monitoring
+chmod +x install.sh
+sudo bash install.sh 
