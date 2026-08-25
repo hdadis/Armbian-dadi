@@ -16,6 +16,6 @@ docker run -it \
     -e EXTRA="-display none -vnc 0.0.0.0:99,password=off" \
     -p 5555:5555 \
     -p 5999:5999 \
-    sickcodes/dock-droid:build
+    sickcodes/dock-droid:latest
 
 change vnc password user
