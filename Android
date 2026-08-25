@@ -1,0 +1,21 @@
+sudo apt update -y
+
+sudo apt install qemu qemu-kvm libvirt-clients libvirt-daemon-system bridge-utils virt-manager -y
+
+apt install docker.io -y
+
+sudo systemctl enable --now libvirtd
+sudo systemctl enable --now virtlogd
+
+echo 1 | sudo tee /sys/module/kvm/parameters/ignore_msrs
+
+sudo modprobe kvm
+
+docker run -it \
+    --device /dev/kvm \
+    -e EXTRA="-display none -vnc 0.0.0.0:99,password=off" \
+    -p 5555:5555 \
+    -p 5999:5999 \
+    sickcodes/dock-droid:build
+
+change vnc password user
