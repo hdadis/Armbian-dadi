@@ -17,7 +17,4 @@ curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n -o
 echo "Konfigurasi n8n berhasil dipasang!"
 docker-compose up -d
 
-cd ~/n8n
-nano docker-compose.yml
-
 echo "Instalasi selesai!"
