@@ -8,7 +8,7 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-yes | sudo apt update && sudo apt install docker-compose docker.io docker-compose-v2 -y
+yes | sudo apt update && sudo apt install docker-compose
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 mkdir ~/n8n && cd ~/n8n
