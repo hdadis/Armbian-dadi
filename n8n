@@ -9,7 +9,8 @@ fi
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 yes | sudo apt update && sudo apt install docker-compose npm
-curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
 curl -fsSL https://get.n8n.io | sh
 mkdir -p ~/n8n && cd ~/n8n
 cd ~/n8n
