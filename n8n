@@ -15,7 +15,7 @@ curl -fsSL https://get.n8n.io | sh
 sudo apt install docker-compose npm
 mkdir -p ~/n8n
 cd ~/n8n
-curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n1 -o .env && cat << 'EOF' >> .env
+curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n1 -o .env
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n -o docker-compose.yml
 echo "Konfigurasi n8n berhasil dipasang!"
 docker-compose pull
