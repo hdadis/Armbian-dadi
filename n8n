@@ -18,6 +18,7 @@ cd ~/n8n
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n1 -o nano .env
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n -o docker-compose.yml
 echo "Konfigurasi n8n berhasil dipasang!"
+docker-compose pull
 docker-compose up -d
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
 sudo cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
