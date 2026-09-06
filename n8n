@@ -9,14 +9,14 @@ fi
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 yes | sudo apt update
+sudo apt install docker-compose
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
 mkdir n8n
 cd n8n
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-env -o .env
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-postgres -o docker-compose.yml
 echo "Konfigurasi n8n berhasil dipasang!"
-sudo apt install docker-compose
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
 docker-compose pull && docker-compose up -d
 docker-compose down
 sudo chown -R 1000:1000 n8n_data/
