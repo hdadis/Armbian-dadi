@@ -18,7 +18,7 @@ yes | sudo apt update
 mkdir n8n
 cd n8n
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-env -o .env
-curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-sql -o docker-compose.yml
+curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-postgres -o docker-compose.yml
 echo "Konfigurasi n8n berhasil dipasang!"
 sudo apt install docker-compose
 curl -fsSL https://get.docker.com -o get-docker.sh
