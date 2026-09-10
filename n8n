@@ -15,7 +15,7 @@ sudo sh get-docker.sh
 mkdir n8n
 cd n8n
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-env -o .env
-curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-postgres-latest -o docker-compose.yml
+curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-lite -o docker-compose.yml
 echo "Konfigurasi n8n berhasil dipasang!"
 docker-compose pull && docker-compose up -d
 docker-compose down
