@@ -6,24 +6,31 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo "Menginstal aplikasi..."
-# Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt-get update
-sudo apt-get install -y curl build-essential python3
-curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-sudo apt-get install -y nodejs
-sudo npm install -g pm2
-sudo npm install -g n8n
+echo "Menginstal dependensi sistem..."
+apt-get update
+apt-get install -y curl build-essential python3
+
+echo "Menginstal Node.js v20..."
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+echo "Menginstal PM2 dan n8n v1.94.0..."
+npm install -g pm2
+npm install -g n8n@1.94.0
+
+echo "Menyiapkan konfigurasi environment n8n..."
 mkdir -p /root/n8n
 cd /root/n8n
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-env -o .env
 
+echo "Menginstal Cloudflared..."
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
-sudo cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
+cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
-pm2 start n8n --env /root/n8n/.env
+echo "Menjalankan n8n dengan PM2..."
+# Menggunakan --dotenv agar PM2 membaca file .env dari folder /root/n8n/.env
+pm2 start n8n --dotenv /root/n8n/.env --name "n8n"
 pm2 save
 pm2 startup
-pm2 logs n8n
 
 echo "Instalasi selesai!"
