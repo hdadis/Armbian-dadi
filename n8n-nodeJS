@@ -9,13 +9,21 @@ fi
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 sudo apt-get update
-sudo apt install -y curl build-essential python3
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-sudo npm install -g n8n
+apt-get install -y curl build-essential python3
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
 sudo npm install -g pm2
-pm2 start n8n
-pm2 startup
+sudo npm install -g n8n
+mkdir -p /root/n8n
+cd /root/n8n
+curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-env -o .env
+
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
+sudo cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
+
+pm2 start n8n --env /root/n8n/.env
 pm2 save
+pm2 startup
+pm2 logs n8n
 
 echo "Instalasi selesai!"
