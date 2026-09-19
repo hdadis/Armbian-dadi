@@ -23,9 +23,9 @@ echo "=== 3. Menginstal PM2 dan n8n v1.94.0 ==="
 npm install -g --unsafe-perm pm2 n8n@1.94.0
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
-mkdir -p /root/n8n
-cd /root/n8n
-curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-env -o /root/n8n/.env
+mkdir n8n
+cd n8n
+curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-sql -o .env
 
 echo "Menginstal Cloudflared..."
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
@@ -33,7 +33,7 @@ cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEi
 
 echo "=== 6. Menjalankan n8n dengan PM2 ==="
 # Menjalankan n8n dari direktori kerja yang tepat
-pm2 start n8n --dotenv /root/n8n/.env --name "n8n"
+pm2 start n8n --dotenv /n8n/.env --name "n8n"
 pm2 save
 
 # Mengatur autostart PM2 secara otomatis tanpa input manual
