@@ -20,7 +20,8 @@ npm -v
 
 echo "=== 3. Menginstal PM2 dan n8n v1.94.0 ==="
 # Menggunakan --unsafe-perm untuk mencegah issue permission saat install global di ARM
-npm install -g --unsafe-perm pm2 n8n@1.94.0
+npm install -g pnpm --unsafe-perm pm2 n8n@1.94.0
+pnpm install
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir n8n
