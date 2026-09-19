@@ -37,9 +37,15 @@ echo "=== 6. Menjalankan n8n dengan PM2 ==="
 pm2 start n8n --dotenv /n8n/.env --name "n8n"
 pm2 save
 
-# Mengatur autostart PM2 secara otomatis tanpa input manual
-env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u root --hp /root
+echo "=== 6. Menjalankan n8n dengan PM2 ==="
+# Jalankan n8n menggunakan file .env dari direktori kerja
+pm2 start n8n --dotenv "$WORKDIR/.env" --name "n8n"
+pm2 save
 
-pm2 logs n8n
+# Autostart PM2
+pm2 startup systemd -u root --hp /root --reset || true
+
+echo "Instalasi selesai dan berhasil dikonfigurasi!"
+pm2 status
 
 echo "Instalasi selesai dan berhasil dikonfigurasi!"
