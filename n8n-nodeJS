@@ -40,12 +40,14 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
 echo "=== 6. Menjalankan n8n dengan PM2 ==="
-# Hapus instance lama jika ada
+# Hapus instance lama jika ada yang nyangkut
 pm2 delete n8n 2>/dev/null || true
 
-# Jalankan n8n dari direktori /root/n8n dengan memuat .env
-npm install -g pm2
-pm2 start n8n --cwd /root/n8n --dotenv /root/n8n/.env --name "n8n"
+# [PERBAIKAN]: Mengambil lokasi pasti biner n8n secara otomatis agar PM2 tidak bingung mencari filenya
+N8N_PATH=$(which n8n)
+
+# Jalankan n8n menggunakan path absolut yang sudah didapatkan
+pm2 start "$N8N_PATH" --cwd /root/n8n --dotenv /root/n8n/.env --name "n8n"
 pm2 save
 
 # Autostart PM2 pada saat booting
