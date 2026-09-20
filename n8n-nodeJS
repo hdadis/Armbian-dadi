@@ -17,25 +17,14 @@ apt-get install -y nodejs
 node -v
 npm -v
 
-echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via pnpm (Lebih Cepat & Stabil) ==="
-# Meningkatkan socket concurrency npm terlebih dahulu agar install pnpm lebih ngebut
+echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via npm ==="
+# Konfigurasi npm agar lebih stabil saat mendownload paket
 npm config set maxsockets 50
 
-# Instal pnpm secara global menggunakan npm bawaan
-npm install -g pnpm --unsafe-perm
-
-# Menggunakan pnpm untuk menginstal pm2 dan n8n secara global. 
-# Ditambahkan --prod untuk melewati devDependencies agar instalasi jauh lebih ringan.
-pnpm setup
-export PNPM_HOME="/root/.local/share/pnpm"
-export PATH="$PNPM_HOME:$PATH"
-
-# Menginstal PM2 dan n8n via pnpm
-pnpm config set child-concurrency 20
-pnpm add -g pm2 n8n@1.94.0 --prod
+# Menggunakan npm install -g langsung agar binary n8n & pm2 langsung masuk ke PATH sistem
+npm install -g pm2 n8n@1.94.0 --unsafe-perm
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
-mkdir -p /root/n8n
 mkdir -p /root/n8n/downloads
 cd /root/n8n
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-sql -o .env
@@ -45,18 +34,21 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
 echo "=== 6. Menjalankan n8n dengan PM2 ==="
-# Hapus instance lama jika ada yang nyangkut
+# Hapus instance lama jika ada
 pm2 delete n8n 2>/dev/null || true
 
-# [PERBAIKAN]: Mengambil lokasi pasti biner n8n secara otomatis agar PM2 tidak bingung mencari filenya
-N8N_PATH=$(which n8n)
+# Pindah ke direktori /root/n8n agar file .env otomatis ter-load oleh n8n
+cd /root/n8n
 
-# Jalankan n8n menggunakan path absolut yang sudah didapatkan
-pm2 start "$N8N_PATH" --cwd /root/n8n --dotenv /root/n8n/.env --name "n8n"
+# Cari lokasi path biner n8n secara tepat dan jalankan via PM2
+N8N_BIN=$(which n8n)
+pm2 start "$N8N_BIN" --name "n8n"
+
+# Simpan konfigurasi PM2 agar bertahan saat reboot
 pm2 save
 
 # Autostart PM2 pada saat booting
-env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u root --hp /root
+pm2 startup systemd -u root --hp /root || true
 
 echo "=== Instalasi Selesai ==="
 pm2 status
