@@ -23,7 +23,7 @@ npm install -g pm2 pnpm n8n@1.94.0 --unsafe-perm
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n
-mkdir -p /home/node/downloads
+mkdir -p /root/n8n/downloads
 cd /root/n8n
 curl -sSL https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/n8n-sql -o .env
 
