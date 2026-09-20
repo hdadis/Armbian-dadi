@@ -7,7 +7,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-apt-get install -y curl build-essential python3 python3-pip software-properties-common
+apt-get update && apt-get install -y curl build-essential python3 python3-pip software-properties-common
 
 echo "=== 2. Menginstal Node.js v20 (LTS) ==="
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -17,9 +17,17 @@ apt-get install -y nodejs
 node -v
 npm -v
 
-echo "=== 3. Menginstal PM2 dan n8n v1.94.0 ==="
-# Menggunakan --unsafe-perm untuk mencegah issue permission saat install global di ARM
-npm install -g pm2 pnpm n8n@1.94.0 --unsafe-perm
+echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via pnpm (Lebih Cepat & Stabil) ==="
+# Meningkatkan socket concurrency npm terlebih dahulu agar install pnpm lebih ngebut
+npm config set maxsockets 50
+
+# Instal pnpm secara global menggunakan npm bawaan
+npm install -g pnpm --unsafe-perm
+
+# Menggunakan pnpm untuk menginstal pm2 dan n8n secara global. 
+# Ditambahkan --prod untuk melewati devDependencies agar instalasi jauh lebih ringan.
+pnpm config set child-concurrency 20
+pnpm add -g pm2 n8n@1.94.0 --prod
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n
