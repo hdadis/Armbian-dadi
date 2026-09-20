@@ -7,7 +7,6 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-apt-get update
 apt-get install -y curl build-essential python3 python3-pip software-properties-common
 
 echo "=== 2. Menginstal Node.js v20 (LTS) ==="
