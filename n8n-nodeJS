@@ -44,6 +44,7 @@ echo "=== 6. Menjalankan n8n dengan PM2 ==="
 pm2 delete n8n 2>/dev/null || true
 
 # Jalankan n8n dari direktori /root/n8n dengan memuat .env
+npm install -g pm2
 pm2 start n8n --cwd /root/n8n --dotenv /root/n8n/.env --name "n8n"
 pm2 save
 
