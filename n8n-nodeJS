@@ -26,6 +26,11 @@ npm install -g pnpm --unsafe-perm
 
 # Menggunakan pnpm untuk menginstal pm2 dan n8n secara global. 
 # Ditambahkan --prod untuk melewati devDependencies agar instalasi jauh lebih ringan.
+pnpm setup
+export PNPM_HOME="/root/.local/share/pnpm"
+export PATH="$PNPM_HOME:$PATH"
+
+# Menginstal PM2 dan n8n via pnpm
 pnpm config set child-concurrency 20
 pnpm add -g pm2 n8n@1.94.0 --prod
 
