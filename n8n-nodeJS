@@ -7,11 +7,11 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-apt-get update && apt-get install -y curl build-essential python3 python3-pip software-properties-common
+sudo apt-get update && apt-get install -y curl build-essential python3 python3-pip software-properties-common
 
 echo "=== 2. Menginstal Node.js v20 (LTS) ==="
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs
+sudo apt-get install -y nodejs
 
 # Verifikasi instalasi Node.js
 node -v
@@ -19,10 +19,10 @@ npm -v
 
 echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via npm ==="
 # Konfigurasi npm agar lebih stabil saat mendownload paket
-npm config set maxsockets 50
+sudo npm config set maxsockets 50
 
 # Menggunakan npm install -g langsung agar binary n8n & pm2 langsung masuk ke PATH sistem
-npm install -g pm2 n8n@1.94.0 --unsafe-perm
+sudo npm install -g pm2 n8n@1.94.0 --unsafe-perm
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n/downloads
