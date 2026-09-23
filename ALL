@@ -16,9 +16,6 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 yes | bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)" -y
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Printer)"
 sh <(curl -s https://cdn.shinobi.video/installers/shinobi-install.sh)
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/n8n-nodeJS)"
-
-
 
 
 echo "Instalasi selesai!"
