@@ -20,6 +20,9 @@ sudo apt install -y postgresql postgresql-contrib curl git build-essential
 
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
+node -v
+npm -v
+sudo npm config set maxsockets 50
 sudo npm install -g pm2 n8n@1.94.0 --unsafe-perm
 
 # [2/5] Setup Database
