@@ -1,1 +1,146 @@
+#!/bin/bash
 
+# Exit on error
+set -e
+
+echo "=================================================="
+echo "   n8n + PostgreSQL LOW-RAM (HG680P 1GB) Setup    "
+echo "               (fixed / hardened)                 "
+echo "=================================================="
+
+# Variable Configuration
+DB_NAME="n8n"
+DB_USER="n8n_user"
+DB_PASS="980Abc"
+PROJECT_DIR="/var/www/n8n"
+
+# [1/6] Install Dependencies
+# FIX: added ca-certificates/gnupg (needed by the nodesource curl|bash step on
+# minimal Armbian images) and python3 (needed by node-gyp for native modules).
+echo "[1/6] Installing System Dependencies, Node.js, & PM2..."
+sudo apt update -y
+sudo apt install -y postgresql postgresql-contrib curl git build-essential ca-certificates gnupg python3
+
+# Node.js 20 LTS
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node -v
+npm -v
+sudo npm config set maxsockets 50
+
+# Install PM2 & n8n
+sudo npm install -g pm2 n8n@1.94.0 --unsafe-perm
+
+# [2/6] Setup & Tune PostgreSQL untuk RAM Kecil
+# FIX: trimmed limits further (24MB shared_buffers, max_connections 10) -
+# n8n only opens a handful of connections, no need to reserve more.
+echo "[2/6] Setting up & Tuning PostgreSQL..."
+sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || \
+sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
+
+sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER'" | grep -q 1 || \
+sudo -u postgres psql -c "CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
+
+# Fix Postgres 15+ Schema Permission Issue
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
+sudo -u postgres psql -d $DB_NAME -c "GRANT ALL ON SCHEMA public TO $DB_USER;"
+
+# Optimasi PostgreSQL Config (Menekan Penggunaan Memori)
+PG_CONF=$(sudo -u postgres psql -t -P format=unaligned -c "SHOW config_file;")
+sudo sed -i "s/^#\?shared_buffers = .*/shared_buffers = 24MB/" "$PG_CONF"
+sudo sed -i "s/^#\?work_mem = .*/work_mem = 2MB/" "$PG_CONF"
+sudo sed -i "s/^#\?maintenance_work_mem = .*/maintenance_work_mem = 16MB/" "$PG_CONF"
+sudo sed -i "s/^#\?max_connections = .*/max_connections = 10/" "$PG_CONF"
+sudo sed -i "s/^#\?effective_cache_size = .*/effective_cache_size = 96MB/" "$PG_CONF"
+
+sudo systemctl restart postgresql
+sudo systemctl enable postgresql
+
+# [3/6] Setup Folder Project
+echo "[3/6] Setting up project directory..."
+sudo mkdir -p $PROJECT_DIR
+sudo chown -R $USER:$USER $PROJECT_DIR
+
+# [4/6] Generate .env FILE (Disesuaikan untuk Hemat Memori)
+# FIX: N8N_ENCRYPTION_KEY no longer reuses the DB password - it's now its own
+# random secret (openssl rand). Also dropped EXECUTIONS_PROCESS, which is a
+# no-op/deprecated var on n8n 1.x, and added N8N_RUNNERS_ENABLED=false so n8n
+# doesn't spawn a second task-runner process (saves ~100-150MB on this box).
+echo "[4/6] Generating .env file at $PROJECT_DIR/.env..."
+
+ENCRYPTION_KEY=$(openssl rand -hex 24)
+
+cat << EOF > $PROJECT_DIR/.env
+# Domain Configuration
+DOMAIN_NAME=ai.balai.my.id
+N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+
+# n8n General Settings
+N8N_HOST=0.0.0.0
+N8N_LISTEN_ADDRESS=0.0.0.0
+N8N_PORT=5678
+N8N_PROTOCOL=https
+NODE_ENV=production
+WEBHOOK_URL=https://ai.balai.my.id/
+N8N_SECURE_COOKIE=false
+
+# Native PostgreSQL Connection
+DB_TYPE=postgresdb
+DB_POSTGRESDB_HOST=localhost
+DB_POSTGRESDB_PORT=5432
+DB_POSTGRESDB_DATABASE=$DB_NAME
+DB_POSTGRESDB_USER=$DB_USER
+DB_POSTGRESDB_PASSWORD=$DB_PASS
+
+# Security Key (unique, not reused from DB password)
+N8N_ENCRYPTION_KEY=$ENCRYPTION_KEY
+
+# Timezone
+GENERIC_TIMEZONE=Asia/Jakarta
+TZ=Asia/Jakarta
+
+# Low Memory Mode Optimizations
+EXECUTIONS_DATA_PRUNE=true
+EXECUTIONS_DATA_MAX_AGE=72
+EXECUTIONS_DATA_PRUNE_MAX_COUNT=1000
+N8N_METRICS=false
+N8N_LOG_LEVEL=warn
+N8N_RUNNERS_ENABLED=false
+N8N_DIAGNOSTICS_ENABLED=false
+EOF
+
+echo ">>> Simpan baik-baik, ini kunci enkripsi n8n Anda: $ENCRYPTION_KEY"
+
+# [5/6] Start PM2 Service dengan Limit V8 Memory Heap
+# FIX (the actual bug): `pm2 start n8n --env .env` does NOT load a dotenv
+# file - `--env` only selects a named env block from an ecosystem.config.js,
+# so the whole .env above was silently never reaching the n8n process.
+# Instead we export the vars into the current shell (set -a / source / set +a)
+# right before starting, which is what PM2 actually captures and persists.
+# Also lowered the V8 heap to 256MB (384MB was too tight a margin on 1GB total)
+# and added --max-memory-restart as a safety net so PM2 restarts n8n instead
+# of the whole box locking up if it leaks.
+echo "[5/6] Starting n8n service via PM2 with Memory Limit..."
+sudo env PATH=$PATH pm2 startup systemd -u $USER --hp $HOME || true
+
+cd $PROJECT_DIR
+
+set -a
+source "$PROJECT_DIR/.env"
+set +a
+
+if pm2 describe n8n > /dev/null 2>&1; then
+    pm2 restart n8n --update-env
+else
+    pm2 start n8n --name "n8n" \
+        --node-args="--max-old-space-size=256" \
+        --max-memory-restart 400M
+fi
+pm2 save
+
+echo "=================================================="
+echo " Instalasi Native Selesai & n8n Berhasil Dijalankan!"
+echo " Status PM2:"
+pm2 status
+echo "=================================================="
