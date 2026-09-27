@@ -14,34 +14,19 @@ DB_USER="n8n_user"
 DB_PASS="980Abc"
 PROJECT_DIR="/var/www/n8n"
 
-# [0/6] Create Swap File (Sangat Penting untuk RAM 1GB)
-# FIX: bumped to 2GB. 1GB swap + 1GB RAM is not enough headroom for
-# `npm install -g n8n` on a single/dual-core ARM box - it OOMs mid-build.
-echo "[0/6] Checking & Creating SWAP File..."
-if [ "$(swapon --show | wc -l)" -eq 0 ]; then
-    echo "SWAP tidak ditemukan. Membuat SWAP File 2GB..."
-    sudo fallocate -l 2G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-    sudo sysctl vm.swappiness=10
-    echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
-else
-    echo "SWAP sudah aktif."
-fi
-
 # [1/6] Install Dependencies
 # FIX: added ca-certificates/gnupg (needed by the nodesource curl|bash step on
 # minimal Armbian images) and python3 (needed by node-gyp for native modules).
 echo "[1/6] Installing System Dependencies, Node.js, & PM2..."
 sudo apt update -y
-sudo apt install -y postgresql postgresql-contrib curl git build-essential \
-    ca-certificates gnupg python3
+sudo apt install -y postgresql postgresql-contrib curl git build-essential ca-certificates gnupg python3
 
 # Node.js 20 LTS
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
+node -v
+npm -v
+sudo npm config set maxsockets 50
 
 # Install PM2 & n8n
 sudo npm install -g pm2 n8n@1.94.0 --unsafe-perm
