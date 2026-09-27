@@ -135,7 +135,7 @@ if pm2 describe n8n > /dev/null 2>&1; then
 else
     pm2 start n8n --name "n8n" \
         --node-args="--max-old-space-size=256" \
-        --max-memory-restart 400M
+        --max-memory-restart 600M
 fi
 pm2 save
 
