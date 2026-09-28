@@ -1,106 +1,144 @@
 #!/bin/bash
+# =====================================================================
+#  n8n + PostgreSQL (native) + PM2  -  LOW-RAM (HG680P 1GB) v2
+#  Aman dijalankan ulang (idempotent): secret tidak berubah.
+#  Jalankan sebagai user biasa (BUKAN root):  bash install-n8n.sh
+# =====================================================================
+set -eu
 
-# Exit on error
-set -e
-
-echo "=================================================="
-echo "   n8n + PostgreSQL LOW-RAM (HG680P 1GB) Setup    "
-echo "               (fixed / hardened)                 "
-echo "=================================================="
-
-# Variable Configuration
+# ------------------------- KONFIGURASI -------------------------------
+DOMAIN="ai.balai.my.id"
 DB_NAME="n8n"
 DB_USER="n8n_user"
-DB_PASS="980Abc"
 PROJECT_DIR="/var/www/n8n"
+N8N_VERSION="latest"          # sebaiknya di-pin, mis. "1.123.0", setelah cek halaman rilis n8n
+NODE_MAJOR="22"               # Node 20 sudah EOL
+SWAP_SIZE="1G"                # dibuat hanya jika belum ada swap
+HEAP_MB="256"                 # V8 heap n8n
+RESTART_MB="600"              # PM2 restart jika RSS melewati ini
+# 127.0.0.1 = hanya reverse proxy di mesin ini yang bisa akses (disarankan).
+# Ganti ke 0.0.0.0 HANYA jika proxy/tunnel ada di mesin lain.
+LISTEN_ADDRESS="127.0.0.1"
+SETUP_NGINX="false"           # true = pasang Nginx (HTTP :80) sebagai reverse proxy
+SECURE_COOKIE="true"          # butuh akses via HTTPS. Set false jika masih akses via http://IP:5678
+# ---------------------------------------------------------------------
 
-# [1/6] Install Dependencies
-# FIX: added ca-certificates/gnupg (needed by the nodesource curl|bash step on
-# minimal Armbian images) and python3 (needed by node-gyp for native modules).
-echo "[1/6] Installing System Dependencies, Node.js, & PM2..."
+echo "=================================================="
+echo "   n8n + PostgreSQL LOW-RAM Setup (v2)            "
+echo "=================================================="
+
+if [ "$(id -u)" -eq 0 ]; then
+    echo "ERROR: jangan jalankan sebagai root. Pakai user biasa yang punya sudo."
+    exit 1
+fi
+
+ENV_FILE="$PROJECT_DIR/.env"
+
+# [0/7] Swap (penting: npm install n8n di 1GB RAM sering OOM tanpa swap)
+echo "[0/7] Memeriksa swap..."
+if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
+    echo "  Tidak ada swap, membuat /swapfile ($SWAP_SIZE)..."
+    sudo fallocate -l "$SWAP_SIZE" /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+    echo 'vm.swappiness=20' | sudo tee /etc/sysctl.d/99-n8n-swap.conf >/dev/null
+    sudo sysctl -p /etc/sysctl.d/99-n8n-swap.conf >/dev/null || true
+else
+    echo "  Swap sudah ada, dilewati."
+fi
+
+# [1/7] Dependensi sistem
+echo "[1/7] Menginstal dependensi sistem..."
 sudo apt update -y
-sudo apt install -y postgresql postgresql-contrib curl git build-essential ca-certificates gnupg python3
+sudo apt install -y postgresql postgresql-contrib curl git build-essential \
+    ca-certificates gnupg python3 openssl
 
-# Node.js 20 LTS
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# [2/7] Node.js + PM2 + n8n
+echo "[2/7] Menginstal Node.js $NODE_MAJOR, PM2 & n8n@$N8N_VERSION..."
+curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
 sudo apt install -y nodejs
 node -v
 npm -v
-sudo npm config set maxsockets 50
+sudo npm install -g pm2 "n8n@${N8N_VERSION}" --unsafe-perm
+n8n --version
 
-# Install PM2 & n8n
-sudo npm install -g pm2 n8n@1.94.0 --unsafe-perm
+# [3/7] Secret (dipertahankan jika sudah ada)
+echo "[3/7] Menyiapkan secret..."
+sudo mkdir -p "$PROJECT_DIR"
+sudo chown -R "$USER":"$USER" "$PROJECT_DIR"
 
-# [2/6] Setup & Tune PostgreSQL untuk RAM Kecil
-# FIX: trimmed limits further (24MB shared_buffers, max_connections 10) -
-# n8n only opens a handful of connections, no need to reserve more.
-echo "[2/6] Setting up & Tuning PostgreSQL..."
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || \
-sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
+DB_PASS=""
+ENCRYPTION_KEY=""
+if [ -f "$ENV_FILE" ]; then
+    DB_PASS=$(grep '^DB_POSTGRESDB_PASSWORD=' "$ENV_FILE" | cut -d= -f2- || true)
+    ENCRYPTION_KEY=$(grep '^N8N_ENCRYPTION_KEY=' "$ENV_FILE" | cut -d= -f2- || true)
+    cp "$ENV_FILE" "$ENV_FILE.bak"
+fi
+# Jika .env hilang tapi n8n pernah jalan, pakai key lama agar credential tetap terbaca
+if [ -z "$ENCRYPTION_KEY" ] && [ -f "$HOME/.n8n/config" ]; then
+    ENCRYPTION_KEY=$(grep -o '"encryptionKey": *"[^"]*"' "$HOME/.n8n/config" | sed 's/.*: *"\(.*\)"/\1/' || true)
+fi
+[ -n "$DB_PASS" ] || DB_PASS=$(openssl rand -hex 16)
+[ -n "$ENCRYPTION_KEY" ] || ENCRYPTION_KEY=$(openssl rand -hex 24)
+
+# [4/7] PostgreSQL
+echo "[4/7] Menyiapkan & men-tuning PostgreSQL..."
+sudo systemctl enable --now postgresql
 
 sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER'" | grep -q 1 || \
-sudo -u postgres psql -c "CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
+# Selalu sinkronkan password dengan yang ada di .env
+sudo -u postgres psql -c "ALTER USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
 
-# Fix Postgres 15+ Schema Permission Issue
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
 sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
-sudo -u postgres psql -d $DB_NAME -c "GRANT ALL ON SCHEMA public TO $DB_USER;"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+sudo -u postgres psql -d "$DB_NAME" -c "GRANT ALL ON SCHEMA public TO $DB_USER;"
 
-# Optimasi PostgreSQL Config (Menekan Penggunaan Memori)
-PG_CONF=$(sudo -u postgres psql -t -P format=unaligned -c "SHOW config_file;")
-sudo sed -i "s/^#\?shared_buffers = .*/shared_buffers = 24MB/" "$PG_CONF"
-sudo sed -i "s/^#\?work_mem = .*/work_mem = 2MB/" "$PG_CONF"
-sudo sed -i "s/^#\?maintenance_work_mem = .*/maintenance_work_mem = 16MB/" "$PG_CONF"
-sudo sed -i "s/^#\?max_connections = .*/max_connections = 10/" "$PG_CONF"
-sudo sed -i "s/^#\?effective_cache_size = .*/effective_cache_size = 96MB/" "$PG_CONF"
-
+# ALTER SYSTEM -> ditulis ke postgresql.auto.conf, idempotent, tanpa sed
+sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '24MB';"
+sudo -u postgres psql -c "ALTER SYSTEM SET work_mem = '2MB';"
+sudo -u postgres psql -c "ALTER SYSTEM SET maintenance_work_mem = '16MB';"
+sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = 20;"
+sudo -u postgres psql -c "ALTER SYSTEM SET effective_cache_size = '96MB';"
 sudo systemctl restart postgresql
-sudo systemctl enable postgresql
 
-# [3/6] Setup Folder Project
-echo "[3/6] Setting up project directory..."
-sudo mkdir -p $PROJECT_DIR
-sudo chown -R $USER:$USER $PROJECT_DIR
+# [5/7] File .env
+echo "[5/7] Menulis $ENV_FILE ..."
+if [ "$SECURE_COOKIE" = "true" ]; then COOKIE_VAL="true"; else COOKIE_VAL="false"; fi
 
-# [4/6] Generate .env FILE (Disesuaikan untuk Hemat Memori)
-# FIX: N8N_ENCRYPTION_KEY no longer reuses the DB password - it's now its own
-# random secret (openssl rand). Also dropped EXECUTIONS_PROCESS, which is a
-# no-op/deprecated var on n8n 1.x, and added N8N_RUNNERS_ENABLED=false so n8n
-# doesn't spawn a second task-runner process (saves ~100-150MB on this box).
-echo "[4/6] Generating .env file at $PROJECT_DIR/.env..."
-
-ENCRYPTION_KEY=$(openssl rand -hex 24)
-
-cat << EOF > $PROJECT_DIR/.env
-# Domain Configuration
-DOMAIN_NAME=ai.balai.my.id
+cat > "$ENV_FILE" << EOF
+# --- Domain & jaringan ---
+N8N_HOST=$DOMAIN
+N8N_EDITOR_BASE_URL=https://$DOMAIN/
+WEBHOOK_URL=https://$DOMAIN/
+N8N_PROTOCOL=https
+N8N_LISTEN_ADDRESS=$LISTEN_ADDRESS
+N8N_PORT=5678
+N8N_PROXY_HOPS=1
+N8N_SECURE_COOKIE=$COOKIE_VAL
+NODE_ENV=production
 N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
 
-# n8n General Settings
-N8N_HOST=0.0.0.0
-N8N_LISTEN_ADDRESS=0.0.0.0
-N8N_PORT=5678
-N8N_PROTOCOL=https
-NODE_ENV=production
-WEBHOOK_URL=https://ai.balai.my.id/
-N8N_SECURE_COOKIE=false
-
-# Native PostgreSQL Connection
+# --- Database ---
 DB_TYPE=postgresdb
-DB_POSTGRESDB_HOST=localhost
+DB_POSTGRESDB_HOST=127.0.0.1
 DB_POSTGRESDB_PORT=5432
 DB_POSTGRESDB_DATABASE=$DB_NAME
 DB_POSTGRESDB_USER=$DB_USER
 DB_POSTGRESDB_PASSWORD=$DB_PASS
 
-# Security Key (unique, not reused from DB password)
+# --- Keamanan (JANGAN diubah setelah credential dibuat) ---
 N8N_ENCRYPTION_KEY=$ENCRYPTION_KEY
 
-# Timezone
+# --- Timezone ---
 GENERIC_TIMEZONE=Asia/Jakarta
 TZ=Asia/Jakarta
 
-# Low Memory Mode Optimizations
+# --- Hemat memori ---
 EXECUTIONS_DATA_PRUNE=true
 EXECUTIONS_DATA_MAX_AGE=72
 EXECUTIONS_DATA_PRUNE_MAX_COUNT=1000
@@ -109,38 +147,76 @@ N8N_LOG_LEVEL=warn
 N8N_RUNNERS_ENABLED=false
 N8N_DIAGNOSTICS_ENABLED=false
 EOF
+chmod 600 "$ENV_FILE"
 
-echo ">>> Simpan baik-baik, ini kunci enkripsi n8n Anda: $ENCRYPTION_KEY"
+echo ">>> Kunci enkripsi n8n (simpan baik-baik): $ENCRYPTION_KEY"
 
-# [5/6] Start PM2 Service dengan Limit V8 Memory Heap
-# FIX (the actual bug): `pm2 start n8n --env .env` does NOT load a dotenv
-# file - `--env` only selects a named env block from an ecosystem.config.js,
-# so the whole .env above was silently never reaching the n8n process.
-# Instead we export the vars into the current shell (set -a / source / set +a)
-# right before starting, which is what PM2 actually captures and persists.
-# Also lowered the V8 heap to 256MB (384MB was too tight a margin on 1GB total)
-# and added --max-memory-restart as a safety net so PM2 restarts n8n instead
-# of the whole box locking up if it leaks.
-echo "[5/6] Starting n8n service via PM2 with Memory Limit..."
-sudo env PATH=$PATH pm2 startup systemd -u $USER --hp $HOME || true
-
-cd $PROJECT_DIR
+# [6/7] Jalankan via PM2
+echo "[6/7] Menjalankan n8n via PM2..."
+cd "$PROJECT_DIR"
 
 set -a
-source "$PROJECT_DIR/.env"
+# shellcheck disable=SC1090
+. "$ENV_FILE"
 set +a
 
-if pm2 describe n8n > /dev/null 2>&1; then
-    pm2 restart n8n --update-env
-else
-    pm2 start n8n --name "n8n" \
-        --node-args="--max-old-space-size=256" \
-        --max-memory-restart 600M
-fi
+# delete + start (bukan restart) supaya node-args & env baru pasti terpakai
+pm2 delete n8n >/dev/null 2>&1 || true
+pm2 start "$(command -v n8n)" --name n8n \
+    --interpreter node \
+    --node-args="--max-old-space-size=$HEAP_MB" \
+    --max-memory-restart "${RESTART_MB}M" \
+    -- start
+pm2 save
+sudo env PATH="$PATH:/usr/bin" pm2 startup systemd -u "$USER" --hp "$HOME" >/dev/null || true
 pm2 save
 
+# [7/7] Nginx (opsional)
+if [ "$SETUP_NGINX" = "true" ]; then
+    echo "[7/7] Menyiapkan Nginx..."
+    sudo apt install -y nginx
+    sudo tee /etc/nginx/sites-available/n8n >/dev/null << EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    client_max_body_size 16m;
+
+    location / {
+        proxy_pass http://127.0.0.1:5678;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+}
+EOF
+    sudo ln -sf /etc/nginx/sites-available/n8n /etc/nginx/sites-enabled/n8n
+    sudo rm -f /etc/nginx/sites-enabled/default
+    sudo nginx -t && sudo systemctl reload nginx
+    echo "  Nginx melayani HTTP :80. Untuk HTTPS gunakan Cloudflare (proxy) atau: sudo apt install certbot python3-certbot-nginx && sudo certbot --nginx -d $DOMAIN"
+else
+    echo "[7/7] Nginx dilewati (SETUP_NGINX=false). Pastikan reverse proxy/tunnel mengarah ke 127.0.0.1:5678."
+fi
+
+# Tunggu n8n siap (start pertama di ARM + migrasi DB bisa 1-3 menit)
+echo "Menunggu n8n siap (maks 3 menit)..."
+READY="no"
+for i in $(seq 1 36); do
+    if curl -fs "http://127.0.0.1:5678/healthz" >/dev/null 2>&1; then READY="yes"; break; fi
+    sleep 5
+done
+
 echo "=================================================="
-echo " Instalasi Native Selesai & n8n Berhasil Dijalankan!"
-echo " Status PM2:"
+if [ "$READY" = "yes" ]; then
+    echo " n8n BERJALAN. Buka: https://$DOMAIN/ (buat akun owner pertama)"
+else
+    echo " n8n belum merespons. Cek log:  pm2 logs n8n --lines 50"
+fi
 pm2 status
+free -h
 echo "=================================================="
