@@ -18,9 +18,9 @@ HEAP_MB="256"                 # V8 heap n8n
 RESTART_MB="600"              # PM2 restart jika RSS melewati ini
 # 127.0.0.1 = hanya reverse proxy di mesin ini yang bisa akses (disarankan).
 # Ganti ke 0.0.0.0 HANYA jika proxy/tunnel ada di mesin lain.
-LISTEN_ADDRESS="127.0.0.1"
-SETUP_NGINX="false"           # true = pasang Nginx (HTTP :80) sebagai reverse proxy
-SECURE_COOKIE="true"          # butuh akses via HTTPS. Set false jika masih akses via http://IP:5678
+LISTEN_ADDRESS="0.0.0.0"
+SETUP_NGINX="true"           # true = pasang Nginx (HTTP :80) sebagai reverse proxy
+SECURE_COOKIE="false"          # butuh akses via HTTPS. Set false jika masih akses via http://IP:5678
 # ---------------------------------------------------------------------
 
 echo "=================================================="
