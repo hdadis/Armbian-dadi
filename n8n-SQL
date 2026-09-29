@@ -17,12 +17,12 @@ sudo apt-get install -y nodejs
 node -v
 npm -v
 
-echo "=== 3. Menginstal PM2 dan n8n v1.121.0 via npm ==="
+echo "=== 3. Menginstal PM2 dan n8n v1.102.1 via npm ==="
 # Konfigurasi npm agar lebih stabil saat mendownload paket
 sudo npm config set maxsockets 50
 
 # Menggunakan npm install -g langsung agar binary n8n & pm2 langsung masuk ke PATH sistem
-sudo npm install -g pm2 n8n@1.121.0 --unsafe-perm
+sudo npm install -g pm2 n8n@1.102.1 --unsafe-perm
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n/downloads
