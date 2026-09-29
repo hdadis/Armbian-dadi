@@ -17,7 +17,7 @@ sudo apt-get install -y nodejs
 node -v
 npm -v
 
-echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via npm ==="
+echo "=== 3. Menginstal PM2 dan n8n v1.102.1 via npm ==="
 # Konfigurasi npm agar lebih stabil saat mendownload paket
 sudo npm config set maxsockets 50
 
