@@ -58,7 +58,7 @@ EOT
 mkdir -p ~/.config/pipewire/
 cp /usr/share/pipewire/pipewire.conf ~/.config/pipewire/
 
-sed -i 's/#\?[[:space:]]*default.clock.rate[[:space:]]*=[[:space:]]*48000/default.clock.rate = 432000/' ~/.config/pipewire/pipewire.conf
-sed -i 's/#\?[[:space:]]*default.clock.allowed-rates[[:space:]]*=.*/default.clock.allowed-rates = [ 44100 48000 432000 ]/' ~/.config/pipewire/pipewire.conf
+sed -i 's/#\?[[:space:]]*default.clock.rate[[:space:]]*=[[:space:]]*48000/#default.clock.rate = 432000/' ~/.config/pipewire/pipewire.conf
+sed -i 's/#\?[[:space:]]*default.clock.allowed-rates[[:space:]]*=.*/#default.clock.allowed-rates = [ 432000 ]/' ~/.config/pipewire/pipewire.conf
 
 echo "Instalasi selesai!"
