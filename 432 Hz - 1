@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# ==============================================================================
+# Script Konversi Audio Massal ke 432Hz untuk Debian/Raspbian CLI
+# ==============================================================================
+
+# 1. Pengecekan dan Instalasi Dependency Otomatis
+echo "Checking dependencies..."
+if ! command -v ffmpeg &> /dev/null; then
+    echo "ffmpeg tidak ditemukan. Menginstal ffmpeg dan librubberband..."
+    sudo apt update && sudo apt install -y ffmpeg librubberband-program
+else
+    echo "[OK] ffmpeg sudah terinstal."
+fi
+
+# 2. Membuat Folder Output khusus
+OUTPUT_DIR="Output_432Hz"
+mkdir -p "$OUTPUT_DIR"
+
+echo ""
+echo "=== Memulai Konversi Massal ke 432Hz ==="
+echo "Mencari file .mp3 di direktori saat ini..."
+echo ""
+
+# Pengecekan apakah ada file mp3 di folder tersebut
+count=$(ls -1 *.mp3 2>/dev/null | wc -l)
+if [ "$count" -eq 0 ]; then
+    echo "[Error] Tidak ditemukan file .mp3 di folder ini!"
+    echo "Silakan jalankan script ini di dalam folder yang berisi lagu Anda."
+    exit 1
+fi
+
+# 3. Proses Loop Konversi Audio
+for file in *.mp3; do
+    # Memastikan file ada dan valid
+    [ -e "$file" ] || continue
+    
+    echo "Sedang memproses: $file ..."
+    
+    # Menurunkan pitch ke 432Hz (Rasio: 432/440 = 0.981818) tanpa mengubah tempo
+    ffmpeg -i "$file" -af "rubberband=pitch=0.981818" -q:a 2 "$OUTPUT_DIR/$file" -y -loglevel error
+    
+    if [ $? -eq 0 ]; then
+        echo "-> [SUKSES]"
+    else
+        echo "-> [GAGAL]"
+    fi
+done
+
+echo ""
+echo "=== Konversi Selesai! ==="
+echo "Total file diproses: $count"
+echo "Semua file 432Hz disimpan di folder: $OUTPUT_DIR"
