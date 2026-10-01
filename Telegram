@@ -9,7 +9,7 @@ import os
 import subprocess
 import re
 
-BOT_TOKEN = '8294902370:AAF_7RR0gB61tECrPHY7UsBU6jgCYQMaGzI'
+BOT_TOKEN = '8872414869:AAFmZTldZBVHf4upw5tHUnjGtBwkCOSV13A'
 bot = telebot.TeleBot(BOT_TOKEN)
 
 def get_ip_details():
@@ -128,3 +128,4 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload && sudo systemctl enable armbianbot.service
+sudo systemctl restart armbianbot.service
