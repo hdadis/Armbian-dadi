@@ -18,11 +18,9 @@ import re
 import psutil
 import time
 
-# Ganti dengan Bot Token baru Anda dari @BotFather
-BOT_TOKEN = "8872414869:AAFmZTldZBVHf4upw5tHUnjGtBwkCOSV13A"
+BOT_TOKEN = "8925352963:AAFg0YIbYgL5d4Wd90HoH25qB62ytnTAZXw"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Menghapus webhook lama agar polling berjalan lancar
 bot.delete_webhook()
 
 def get_ip_details():
@@ -33,20 +31,33 @@ def get_ip_details():
         data = response.json()
         
         if data.get("status") == "success":
+            country = data.get('country', '')
+            country_code = data.get('countryCode', '')
+            region = data.get('region', '')
+            region_name = data.get('regionName', '')
+            city = data.get('city', '')
+            timezone = data.get('timezone', '')
+            isp = data.get('isp', '')
+            org = data.get('org', '')
+            as_num = data.get('as', '')
+            as_name = data.get('asname', '')
+            query = data.get('query', '')
+
             return (
                 "==== IP Detail Information ====\n"
-                f"Country Name : {data.get(\"country\", \"\")}\n"
-                f"Country Code : {data.get(\"countryCode\", \"\")}\n"
-                f"Region       : {data.get(\"region\", \"\")}\n"
-                f"Region Name  : {data.get(\"regionName\", \"\")}\n"
-                f"City         : {data.get(\"city\", \"\")}\n"
-                f"Timezone     : {data.get(\"timezone\", \"\")}\n"
-                f"ISP          : {data.get(\"isp\", \"\")}\n"
-                f"AS           : {data.get(\"as\", \"\")}\n"
-                f"AS Name      : {data.get(\"asname\", \"\")}\n"
-                f"IP Address   : {data.get(\"query\", \"\")}"
+                f"Country Name : {country}\n"
+                f"Country Code : {country_code}\n"
+                f"Region       : {region}\n"
+                f"Region Name  : {region_name}\n"
+                f"City         : {city}\n"
+                f"Timezone     : {timezone}\n"
+                f"ISP          : {isp}\n"
+                f"Organization : {org}\n"
+                f"AS           : {as_num}\n"
+                f"AS Name      : {as_name}\n"
+                f"IP Address   : {query}"
             )
-        return f"Gagal mengambil data: {data.get(\"message\")}"
+        return f"Gagal mengambil data: {data.get('message', '')}"
     except requests.exceptions.RequestException as e:
         return f"Terjadi kesalahan jaringan: {e}"
     except Exception as e:
@@ -106,10 +117,10 @@ def send_welcome(message):
         "🤖 *Armbian Bot Ready!*\n\n"
         "Perintah yang tersedia:\n"
         "➡️ /status - Ringkasan lengkap status server\n"
-        "➡️ /cekip - Detail IP publik server\n"
+        "➡️️ /cekip - Detail IP publik server\n"
         "➡️ /ceksuhu - Suhu CPU Armbian\n"
         "➡️ /cekram - Penggunaan RAM saat ini\n"
-        "➡️ /cekdisk - Penggunaan penyimpanan (Storage)\n"
+        "➡️️ /cekdisk - Penggunaan penyimpanan (Storage)\n"
         "➡️ /uptime - Durasi server aktif\n"
         "➡️ /cekjaringan - Pemindaian perangkat di LAN"
     )
