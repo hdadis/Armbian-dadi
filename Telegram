@@ -1,40 +1,53 @@
-sudo apt update && sudo apt install python3 python3-pip python3-venv arp-scan -y && \
-mkdir -p ~/armbian-bot && cd ~/armbian-bot && \
-python3 -m venv venv && \
-./venv/bin/pip install pyTelegramBotAPI requests && \
-cat << 'EOF' > bot.py
+# 1. Update paket & install dependencies pendukung
+sudo apt update && sudo apt install python3 python3-pip python3-venv arp-scan -y
+
+# 2. Buat folder direktori kerja di /root
+sudo mkdir -p /root/armbian-bot && cd /root/armbian-bot
+
+# 3. Buat Virtual Environment & Install pustaka Python
+sudo python3 -m venv /root/armbian-bot/venv
+sudo /root/armbian-bot/venv/bin/pip install pyTelegramBotAPI requests psutil
+
+# 4. Buat file bot.py lengkap
+sudo bash -c 'cat << "EOF" > /root/armbian-bot/bot.py
 import telebot
 import requests
 import os
 import subprocess
 import re
+import psutil
+import time
 
-BOT_TOKEN = '8872414869:AAFmZTldZBVHf4upw5tHUnjGtBwkCOSV13A'
+# Ganti dengan Bot Token baru Anda dari @BotFather
+BOT_TOKEN = "8872414869:AAFmZTldZBVHf4upw5tHUnjGtBwkCOSV13A"
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# Menghapus webhook lama agar polling berjalan lancar
+bot.delete_webhook()
 
 def get_ip_details():
     try:
-url = "http://ip-api.com/json/"
+        url = "http://ip-api.com/json/"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
-
         data = response.json()
-
+        
         if data.get("status") == "success":
             return (
                 "==== IP Detail Information ====\n"
-                f"Country Name : {data.get('country', '')}\n"
-                f"Country Code : {data.get('countryCode', '')}\n"
-                f"Region       : {data.get('region', '')}\n"
-                f"Region Name  : {data.get('regionName', '')}\n"
-                f"City         : {data.get('city', '')}\n"
-                f"Timezone     : {data.get('timezone', '')}\n"
-                f"ISP          : {data.get('isp', '')}\n"
-                f"AS           : {data.get('as', '')}\n"
-                f"AS Name      : {data.get('asname', '')}\n"
-                f"IP Address   : {data.get('query', '')}"
+                f"Country Name : {data.get(\"country\", \"\")}\n"
+                f"Country Code : {data.get(\"countryCode\", \"\")}\n"
+                f"Region       : {data.get(\"region\", \"\")}\n"
+                f"Region Name  : {data.get(\"regionName\", \"\")}\n"
+                f"City         : {data.get(\"city\", \"\")}\n"
+                f"Timezone     : {data.get(\"timezone\", \"\")}\n"
+                f"ISP          : {data.get(\"isp\", \"\")}\n"
+                f"Organization : {data.get(\"org\", \"\")}\n"
+                f"AS           : {data.get(\"as\", \"\")}\n"
+                f"AS Name      : {data.get(\"asname\", \"\")}\n"
+                f"IP Address   : {data.get(\"query\", \"\")}"
             )
-        return f"Gagal mengambil data: {data.get('message')}"
+        return f"Gagal mengambil data: {data.get(\"message\")}"
     except requests.exceptions.RequestException as e:
         return f"Terjadi kesalahan jaringan: {e}"
     except Exception as e:
@@ -57,21 +70,19 @@ def get_cpu_temp():
 
 def get_local_devices():
     try:
-        result = subprocess.check_output(["sudo", "arp-scan", "--localnet"], text=True)
-        lines = result.split('\n')
+        result = subprocess.check_output(["arp-scan", "--localnet"], text=True)
+        lines = result.split("\n")
         devices = []
         
-        ip_mac_pattern = re.compile(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9a-fA-F:]{17})')
+        ip_mac_pattern = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9a-fA-F:]{17})")
         
         for line in lines:
             match = ip_mac_pattern.search(line)
             if match:
                 ip = match.group(1)
                 mac = match.group(2)
-                
-                parts = line.split('\t')
+                parts = line.split("\t")
                 vendor = parts[2].strip() if len(parts) > 2 else "Unknown Device"
-                
                 devices.append(f"Nama : {vendor}\nIP   : {ip}\nMAC  : {mac}\n-----------------------")
         
         if devices:
@@ -83,38 +94,96 @@ def get_local_devices():
     except Exception as e:
         return f"Terjadi kesalahan: {e}"
 
-@bot.message_handler(commands=['start', 'help'])
+def get_uptime():
+    uptime_seconds = time.time() - psutil.boot_time()
+    days, remainder = divmod(uptime_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s"
+
+@bot.message_handler(commands=["start", "help"])
 def send_welcome(message):
     menu = (
         "🤖 *Armbian Bot Ready!*\n\n"
         "Perintah yang tersedia:\n"
-        "➡️ /cekip - Cek detail IP publik server\n"
-        "➡️ /ceksuhu - Cek suhu CPU Armbian\n"
-        "➡️ /cekjaringan - Cek perangkat terkoneksi di LAN"
+        "➡️ /status - Ringkasan lengkap status server\n"
+        "➡️ /cekip - Detail IP publik server\n"
+        "➡️ /ceksuhu - Suhu CPU Armbian\n"
+        "➡️ /cekram - Penggunaan RAM saat ini\n"
+        "➡️ /cekdisk - Penggunaan penyimpanan (Storage)\n"
+        "➡️ /uptime - Durasi server aktif\n"
+        "➡️ /cekjaringan - Pemindaian perangkat di LAN"
     )
     bot.reply_to(message, menu, parse_mode="Markdown")
 
-@bot.message_handler(commands=['cekip'])
+@bot.message_handler(commands=["status"])
+def send_status(message):
+    suhu = get_cpu_temp()
+    ram = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    uptime = get_uptime()
+    
+    status_msg = (
+        "📊 *STATUS SERVER ARMBIAN*\n\n"
+        f"⏱️ *Uptime:* `{uptime}`\n"
+        f"🌡️ *Suhu CPU:* `{suhu}`\n"
+        f"🧠 *RAM:* `{ram.percent}%` ({ram.used // (1024**2)}MB / {ram.total // (1024**2)}MB)\n"
+        f"💾 *Disk:* `{disk.percent}%` ({disk.free // (1024**3)}GB Free)\n"
+    )
+    bot.send_message(message.chat.id, status_msg, parse_mode="Markdown")
+
+@bot.message_handler(commands=["cekip"])
 def send_ip_details(message):
     bot.reply_to(message, "⏳ Sedang mengambil data IP...")
     hasil_ip = get_ip_details()
     bot.send_message(message.chat.id, f"`{hasil_ip}`", parse_mode="Markdown")
 
-@bot.message_handler(commands=['ceksuhu'])
+@bot.message_handler(commands=["ceksuhu"])
 def send_temp(message):
     suhu = get_cpu_temp()
     respons = f"🌡️ *Suhu CPU Armbian:* `{suhu}`"
     bot.send_message(message.chat.id, respons, parse_mode="Markdown")
 
-@bot.message_handler(commands=['cekjaringan'])
+@bot.message_handler(commands=["cekram"])
+def send_ram(message):
+    ram = psutil.virtual_memory()
+    total_gb = ram.total / (1024 ** 3)
+    used_gb = ram.used / (1024 ** 3)
+    respons = (
+        f"🧠 *Penggunaan RAM:*\n"
+        f"Terpakai : `{used_gb:.2f} GB` / `{total_gb:.2f} GB` (`{ram.percent}%`)"
+    )
+    bot.send_message(message.chat.id, respons, parse_mode="Markdown")
+
+@bot.message_handler(commands=["cekdisk"])
+def send_disk(message):
+    disk = psutil.disk_usage("/")
+    total_gb = disk.total / (1024 ** 3)
+    used_gb = disk.used / (1024 ** 3)
+    free_gb = disk.free / (1024 ** 3)
+    respons = (
+        f"💾 *Penggunaan Disk (/):*\n"
+        f"Terpakai : `{used_gb:.2f} GB` / `{total_gb:.2f} GB` (`{disk.percent}%`)\n"
+        f"Sisa     : `{free_gb:.2f} GB`"
+    )
+    bot.send_message(message.chat.id, respons, parse_mode="Markdown")
+
+@bot.message_handler(commands=["uptime"])
+def send_uptime(message):
+    respons = f"⏱️ *Server Uptime:* `{get_uptime()}`"
+    bot.send_message(message.chat.id, respons, parse_mode="Markdown")
+
+@bot.message_handler(commands=["cekjaringan"])
 def send_network_devices(message):
     bot.reply_to(message, "🔍 Sedang memindai jaringan lokal, mohon tunggu...")
     hasil_jaringan = get_local_devices()
     bot.send_message(message.chat.id, f"`{hasil_jaringan}`", parse_mode="Markdown")
 
 bot.infinity_polling()
-EOF
-sudo cat << 'EOF' > /etc/systemd/system/armbianbot.service
+EOF'
+
+# 5. Buat file konfigurasi systemd service
+sudo bash -c 'cat << "EOF" > /etc/systemd/system/armbianbot.service
 [Unit]
 Description=Telegram Bot Armbian Monitor
 After=network.target
@@ -129,6 +198,9 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
-sudo systemctl daemon-reload && sudo systemctl enable armbianbot.service
+EOF'
+
+# 6. Reload daemon, aktifkan, dan jalankan service
+sudo systemctl daemon-reload
+sudo systemctl enable armbianbot.service
 sudo systemctl restart armbianbot.service
