@@ -42,7 +42,6 @@ def get_ip_details():
                 f"City         : {data.get(\"city\", \"\")}\n"
                 f"Timezone     : {data.get(\"timezone\", \"\")}\n"
                 f"ISP          : {data.get(\"isp\", \"\")}\n"
-                f"Organization : {data.get(\"org\", \"\")}\n"
                 f"AS           : {data.get(\"as\", \"\")}\n"
                 f"AS Name      : {data.get(\"asname\", \"\")}\n"
                 f"IP Address   : {data.get(\"query\", \"\")}"
@@ -204,3 +203,4 @@ EOF'
 sudo systemctl daemon-reload
 sudo systemctl enable armbianbot.service
 sudo systemctl restart armbianbot.service
+sudo systemctl status armbianbot.service
