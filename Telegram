@@ -38,7 +38,6 @@ def get_ip_details():
             city = data.get('city', '')
             timezone = data.get('timezone', '')
             isp = data.get('isp', '')
-            org = data.get('org', '')
             as_num = data.get('as', '')
             as_name = data.get('asname', '')
             query = data.get('query', '')
@@ -52,7 +51,6 @@ def get_ip_details():
                 f"City         : {city}\n"
                 f"Timezone     : {timezone}\n"
                 f"ISP          : {isp}\n"
-                f"Organization : {org}\n"
                 f"AS           : {as_num}\n"
                 f"AS Name      : {as_name}\n"
                 f"IP Address   : {query}"
