@@ -116,13 +116,9 @@ def send_welcome(message):
     menu = (
         "🤖 *Armbian Bot Ready!*\n\n"
         "Perintah yang tersedia:\n"
-        "➡️ /status - Ringkasan lengkap status server\n"
         "➡️️ /cekip - Detail IP publik server\n"
-        "➡️ /ceksuhu - Suhu CPU Armbian\n"
-        "➡️ /cekram - Penggunaan RAM saat ini\n"
-        "➡️️ /cekdisk - Penggunaan penyimpanan (Storage)\n"
-        "➡️ /uptime - Durasi server aktif\n"
         "➡️ /cekjaringan - Pemindaian perangkat di LAN"
+        "➡️ /status - Ringkasan lengkap status server\n"
     )
     bot.reply_to(message, menu, parse_mode="Markdown")
 
@@ -147,41 +143,6 @@ def send_ip_details(message):
     bot.reply_to(message, "⏳ Sedang mengambil data IP...")
     hasil_ip = get_ip_details()
     bot.send_message(message.chat.id, f"`{hasil_ip}`", parse_mode="Markdown")
-
-@bot.message_handler(commands=["ceksuhu"])
-def send_temp(message):
-    suhu = get_cpu_temp()
-    respons = f"🌡️ *Suhu CPU Armbian:* `{suhu}`"
-    bot.send_message(message.chat.id, respons, parse_mode="Markdown")
-
-@bot.message_handler(commands=["cekram"])
-def send_ram(message):
-    ram = psutil.virtual_memory()
-    total_gb = ram.total / (1024 ** 3)
-    used_gb = ram.used / (1024 ** 3)
-    respons = (
-        f"🧠 *Penggunaan RAM:*\n"
-        f"Terpakai : `{used_gb:.2f} GB` / `{total_gb:.2f} GB` (`{ram.percent}%`)"
-    )
-    bot.send_message(message.chat.id, respons, parse_mode="Markdown")
-
-@bot.message_handler(commands=["cekdisk"])
-def send_disk(message):
-    disk = psutil.disk_usage("/")
-    total_gb = disk.total / (1024 ** 3)
-    used_gb = disk.used / (1024 ** 3)
-    free_gb = disk.free / (1024 ** 3)
-    respons = (
-        f"💾 *Penggunaan Disk (/):*\n"
-        f"Terpakai : `{used_gb:.2f} GB` / `{total_gb:.2f} GB` (`{disk.percent}%`)\n"
-        f"Sisa     : `{free_gb:.2f} GB`"
-    )
-    bot.send_message(message.chat.id, respons, parse_mode="Markdown")
-
-@bot.message_handler(commands=["uptime"])
-def send_uptime(message):
-    respons = f"⏱️ *Server Uptime:* `{get_uptime()}`"
-    bot.send_message(message.chat.id, respons, parse_mode="Markdown")
 
 @bot.message_handler(commands=["cekjaringan"])
 def send_network_devices(message):
@@ -215,3 +176,4 @@ sudo systemctl daemon-reload
 sudo systemctl enable armbianbot.service
 sudo systemctl restart armbianbot.service
 sudo systemctl status armbianbot.service
+/root/armbian-bot/venv/bin/python3 /root/armbian-bot/bot.py
