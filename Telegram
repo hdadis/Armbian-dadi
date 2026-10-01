@@ -117,8 +117,8 @@ def send_welcome(message):
         "🤖 *Armbian Bot Ready!*\n\n"
         "Perintah yang tersedia:\n"
         "➡️️ /cekip - Detail IP publik server\n"
-        "➡️ /cekjaringan - Pemindaian perangkat di LAN"
-        "➡️ /status - Ringkasan lengkap status server\n"
+        "➡️ /cekjaringan - Pemindaian perangkat di LAN\n"
+        "➡️ /status - Ringkasan lengkap status server"
     )
     bot.reply_to(message, menu, parse_mode="Markdown")
 
