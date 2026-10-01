@@ -14,10 +14,12 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 def get_ip_details():
     try:
-        url = "http://ip-api.com"
-        response = requests.get(url, timeout=10)
+url = "http://ip-api.com/json/"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+
         data = response.json()
-        
+
         if data.get("status") == "success":
             return (
                 "==== IP Detail Information ====\n"
@@ -28,7 +30,6 @@ def get_ip_details():
                 f"City         : {data.get('city', '')}\n"
                 f"Timezone     : {data.get('timezone', '')}\n"
                 f"ISP          : {data.get('isp', '')}\n"
-                f"Organization : {data.get('org', '')}\n"
                 f"AS           : {data.get('as', '')}\n"
                 f"AS Name      : {data.get('asname', '')}\n"
                 f"IP Address   : {data.get('query', '')}"
@@ -36,6 +37,8 @@ def get_ip_details():
         return f"Gagal mengambil data: {data.get('message')}"
     except requests.exceptions.RequestException as e:
         return f"Terjadi kesalahan jaringan: {e}"
+    except Exception as e:
+        return f"Gagal memproses response: {e}"
 
 def get_cpu_temp():
     thermal_paths = [
