@@ -105,13 +105,13 @@ def send_welcome(message):
     menu = (
         "🤖 *Armbian Bot Ready!*\n\n"
         "Perintah yang tersedia:\n"
-        "➡️️ /IP Address - Detail IP publik server\n"
-        "➡️ /Devices Connected - Pemindaian perangkat di LAN\n"
-        "➡️ /Armbian Status - Ringkasan lengkap status server"
+        "➡️️ /IPAddress - Detail IP publik server\n"
+        "➡️ /DevicesConnected - Pemindaian perangkat di LAN\n"
+        "➡️ /ArmbianStatus - Ringkasan lengkap status server"
     )
     bot.reply_to(message, menu, parse_mode="Markdown")
 
-@bot.message_handler(commands=["Armbian Status"])
+@bot.message_handler(commands=["ArmbianStatus"])
 def send_status(message):
     suhu = get_cpu_temp()
     ram = psutil.virtual_memory()
@@ -127,13 +127,13 @@ def send_status(message):
     )
     bot.send_message(message.chat.id, status_msg, parse_mode="Markdown")
 
-@bot.message_handler(commands=["IP Address"])
+@bot.message_handler(commands=["IPAddress"])
 def send_ip_details(message):
     bot.reply_to(message, "⏳ Sedang mengambil data IP...")
     hasil_ip = get_ip_details()
     bot.send_message(message.chat.id, f"`{hasil_ip}`", parse_mode="Markdown")
 
-@bot.message_handler(commands=["Devices Connected"])
+@bot.message_handler(commands=["DevicesConnected"])
 def send_network_devices(message):
     bot.reply_to(message, "🔍 Sedang memindai jaringan lokal, mohon tunggu...")
     hasil_jaringan = get_local_devices()
