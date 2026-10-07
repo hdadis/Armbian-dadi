@@ -18,7 +18,7 @@ import re
 import psutil
 import time
 
-BOT_TOKEN = "8925352963:AAFg0YIbYgL5d4Wd90HoH25qB62ytnTAZXw"
+BOT_TOKEN = "8656270122:AAFeiGHSn58eCDGY2pOQ2sNnQJZGPc-PJr0"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 bot.delete_webhook()
