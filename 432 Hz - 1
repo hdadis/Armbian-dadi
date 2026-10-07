@@ -8,7 +8,7 @@
 echo "Checking dependencies..."
 if ! command -v ffmpeg &> /dev/null; then
     echo "ffmpeg tidak ditemukan. Menginstal ffmpeg dan librubberband..."
-    sudo apt update && sudo apt install -y ffmpeg librubberband-program
+    sudo apt install -y ffmpeg librubberband-program
 else
     echo "[OK] ffmpeg sudah terinstal."
 fi
