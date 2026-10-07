@@ -31,31 +31,22 @@ def get_ip_details():
         data = response.json()
         
         if data.get("status") == "success":
-            country = data.get('country', '')
-            country_code = data.get('countryCode', '')
-            region = data.get('region', '')
-            region_name = data.get('regionName', '')
-            city = data.get('city', '')
-            timezone = data.get('timezone', '')
-            isp = data.get('isp', '')
-            as_num = data.get('as', '')
-            as_name = data.get('asname', '')
-            query = data.get('query', '')
-
             return (
                 "==== IP Detail Information ====\n"
-                f"Country Name : {country}\n"
-                f"Country Code : {country_code}\n"
-                f"Region       : {region}\n"
-                f"Region Name  : {region_name}\n"
-                f"City         : {city}\n"
-                f"Timezone     : {timezone}\n"
-                f"ISP          : {isp}\n"
-                f"AS           : {as_num}\n"
-                f"AS Name      : {as_name}\n"
-                f"IP Address   : {query}"
+                f"Country Name : {data.get('country', '')}\n"
+                f"Country Code : {data.get('countryCode', '')}\n"
+                f"Region       : {data.get('region', '')}\n"
+                f"Region Name  : {data.get('regionName', '')}\n"
+                f"City         : {data.get('city', '')}\n"
+                f"Timezone     : {data.get('timezone', '')}\n"
+                f"ISP          : {data.get('isp', '')}\n"
+                f"AS           : {data.get('as', '')}\n"
+                f"IP Address   : {data.get('query', '')}"
             )
-        return f"Gagal mengambil data: {data.get('message', '')}"
+        else:
+            msg = data.get('message', 'Gagal mendapatkan data IP')
+            return f"API Error: {msg}"
+            
     except requests.exceptions.RequestException as e:
         return f"Terjadi kesalahan jaringan: {e}"
     except Exception as e:
