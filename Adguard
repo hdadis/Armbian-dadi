@@ -25,6 +25,10 @@ EOF
 
 sudo tee -a /opt/AdGuardHome/AdGuardHome.yaml << 'EOF'
 
+sudo systemctl start AdGuardHome
+
+sudo systemctl stop AdGuardHome
+
 filters:
   - enabled: true
     url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_24.txt
