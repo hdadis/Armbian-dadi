@@ -17,19 +17,51 @@ import subprocess
 import re
 import psutil
 import time
+import ipaddress
 
 BOT_TOKEN = "8656270122:AAFeiGHSn58eCDGY2pOQ2sNnQJZGPc-PJr0"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 bot.delete_webhook()
 
-# Mendaftarkan menu perintah ke Telegram agar muncul saat mengetik '/'
+# Mendaftarkan menu pop-up otomatis ke Telegram (wajib huruf kecil)
 bot.set_my_commands([
-    telebot.types.BotCommand("IPAddress"),
-    telebot.types.BotCommand("DevicesConnected"),
-    telebot.types.BotCommand("ArmbianStatus"),
-    telebot.types.BotCommand("help")
+    telebot.types.BotCommand("ipaddress", "Detail IP publik server"),
+    telebot.types.BotCommand("devicesconnected", "Pemindaian perangkat di LAN"),
+    telebot.types.BotCommand("armbianstatus", "Ringkasan lengkap status server"),
+    telebot.types.BotCommand("help", "Tampilkan bantuan menu")
 ])
+
+CUSTOM_DEVICES = {
+    "192.168.18.1": "Router / Gateway Utama",
+}
+
+def resolve_hostname(ip, mac):
+    mac_lower = mac.lower()
+    if mac_lower in CUSTOM_DEVICES:
+        return CUSTOM_DEVICES[mac_lower]
+    if ip in CUSTOM_DEVICES:
+        return CUSTOM_DEVICES[ip]
+
+    try:
+        nmb_out = subprocess.check_output(["nmblookup", "-A", ip], stderr=subprocess.DEVNULL, text=True, timeout=1)
+        for line in nmb_out.splitlines():
+            if "<00>" in line and not "GROUP" in line:
+                name = line.split()[0].strip()
+                if name:
+                    return name
+    except Exception:
+        pass
+
+    try:
+        dns_out = subprocess.check_output(["nslookup", ip], stderr=subprocess.DEVNULL, text=True, timeout=1)
+        for line in dns_out.splitlines():
+            if "name =" in line:
+                return line.split("name =")[1].strip().rstrip(".")
+    except Exception:
+        pass
+
+    return "(Unknown Device)"
 
 def get_ip_details():
     try:
@@ -41,18 +73,18 @@ def get_ip_details():
         if data.get("status") == "success":
             return (
                 "==== IP Detail Information ====\n"
-                f"Country Name : {data.get('country', '')}\n"
-                f"Country Code : {data.get('countryCode', '')}\n"
-                f"Region       : {data.get('region', '')}\n"
-                f"Region Name  : {data.get('regionName', '')}\n"
-                f"City         : {data.get('city', '')}\n"
-                f"Timezone     : {data.get('timezone', '')}\n"
-                f"ISP          : {data.get('isp', '')}\n"
-                f"AS           : {data.get('as', '')}\n"
-                f"IP Address   : {data.get('query', '')}"
+                f"Country Name : {data.get(\x27country\x27, \x27\x27)}\n"
+                f"Country Code : {data.get(\x27countryCode\x27, \x27\x27)}\n"
+                f"Region       : {data.get(\x27region\x27, \x27\x27)}\n"
+                f"Region Name  : {data.get(\x27regionName\x27, \x27\x27)}\n"
+                f"City         : {data.get(\x27city\x27, \x27\x27)}\n"
+                f"Timezone     : {data.get(\x27timezone\x27, \x27\x27)}\n"
+                f"ISP          : {data.get(\x27isp\x27, \x27\x27)}\n"
+                f"AS           : {data.get(\x27as\x27, \x27\x27)}\n"
+                f"IP Address   : {data.get(\x27query\x27, \x27\x27)}"
             )
         else:
-            msg = data.get('message', 'Gagal mendapatkan data IP')
+            msg = data.get("message", "Gagal mendapatkan data IP")
             return f"API Error: {msg}"
             
     except requests.exceptions.RequestException as e:
@@ -79,7 +111,7 @@ def get_local_devices():
     try:
         result = subprocess.check_output(["arp-scan", "--localnet"], text=True)
         lines = result.split("\n")
-        devices = []
+        device_list = []
         
         ip_mac_pattern = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9a-fA-F:]{17})")
         
@@ -88,12 +120,32 @@ def get_local_devices():
             if match:
                 ip = match.group(1)
                 mac = match.group(2)
+                
                 parts = line.split("\t")
-                vendor = parts[2].strip() if len(parts) > 2 else "Unknown Device"
-                devices.append(f"Nama : {vendor}\nIP   : {ip}\nMAC  : {mac}\n-----------------------")
+                vendor_oui = parts[2].strip() if len(parts) > 2 else ""
+                
+                device_name = resolve_hostname(ip, mac)
+                
+                if device_name == "(Unknown Device)" and vendor_oui and vendor_oui != "(Unknown)":
+                    device_name = f"Vendor: {vendor_oui}"
+
+                device_list.append({
+                    "ip": ip,
+                    "mac": mac,
+                    "name": device_name
+                })
         
-        if devices:
-            return "==== Connected Devices ====\n" + "\n".join(devices)
+        # Pengurutan numerik IP Address
+        device_list.sort(key=lambda x: ipaddress.ip_address(x["ip"]))
+
+        formatted_devices = []
+        for dev in device_list:
+            formatted_devices.append(
+                f"Nama : {dev[\x27name\x27]}\nIP   : {dev[\x27ip\x27]}\nMAC  : {dev[\x27mac\x27]}\n-----------------------"
+            )
+        
+        if formatted_devices:
+            return "==== Connected Devices ====\n" + "\n".join(formatted_devices)
         return "Tidak ada perangkat lain yang terdeteksi di jaringan lokal."
             
     except subprocess.CalledProcessError:
@@ -108,18 +160,18 @@ def get_uptime():
     minutes, seconds = divmod(remainder, 60)
     return f"{int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s"
 
-@bot.message_handler(commands=["start", "help"])
+@bot.message_handler(commands=["start", "Start", "help", "Help"])
 def send_welcome(message):
     menu = (
         "🤖 *Armbian Bot Ready!*\n\n"
         "Perintah yang tersedia:\n"
-        "➡️️ /IPAddress - Detail IP publik server\n"
-        "➡️ /DevicesConnected - Pemindaian perangkat di LAN\n"
-        "➡️ /ArmbianStatus - Ringkasan lengkap status server"
+        "➡️ /ipaddress - Detail IP publik server\n"
+        "➡️ /devicesconnected - Pemindaian perangkat di LAN\n"
+        "➡️ /armbianstatus - Ringkasan lengkap status server"
     )
     bot.reply_to(message, menu, parse_mode="Markdown")
 
-@bot.message_handler(commands=["ArmbianStatus"])
+@bot.message_handler(commands=["armbianstatus", "ArmbianStatus"])
 def send_status(message):
     suhu = get_cpu_temp()
     ram = psutil.virtual_memory()
@@ -135,13 +187,13 @@ def send_status(message):
     )
     bot.send_message(message.chat.id, status_msg, parse_mode="Markdown")
 
-@bot.message_handler(commands=["IPAddress"])
+@bot.message_handler(commands=["ipaddress", "IPAddress"])
 def send_ip_details(message):
     bot.reply_to(message, "⏳ Sedang mengambil data IP...")
     hasil_ip = get_ip_details()
     bot.send_message(message.chat.id, f"`{hasil_ip}`", parse_mode="Markdown")
 
-@bot.message_handler(commands=["DevicesConnected"])
+@bot.message_handler(commands=["devicesconnected", "DevicesConnected"])
 def send_network_devices(message):
     bot.reply_to(message, "🔍 Sedang memindai jaringan lokal, mohon tunggu...")
     hasil_jaringan = get_local_devices()
