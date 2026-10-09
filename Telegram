@@ -23,6 +23,14 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 bot.delete_webhook()
 
+# Mendaftarkan menu perintah ke Telegram agar muncul saat mengetik '/'
+bot.set_my_commands([
+    telebot.types.BotCommand("IPAddress"),
+    telebot.types.BotCommand("DevicesConnected"),
+    telebot.types.BotCommand("ArmbianStatus"),
+    telebot.types.BotCommand("help")
+])
+
 def get_ip_details():
     try:
         url = "http://ip-api.com/json/"
