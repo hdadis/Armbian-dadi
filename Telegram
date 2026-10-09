@@ -17,9 +17,11 @@ import subprocess
 import re
 import psutil
 import time
+import threading
 import ipaddress
 
 BOT_TOKEN = "8656270122:AAFeiGHSn58eCDGY2pOQ2sNnQJZGPc-PJr0"
+MY_CHAT_ID = "509387708"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 try:
@@ -48,8 +50,8 @@ CUSTOM_DEVICES = {
     "f0:a7:31:36:78:db": "TAPO Kitchen",
     "30:de:4b:a8:4d:44": "TAPO Kamar Ayel",
     "30:de:4b:a8:55:5f": "TAPO Parkir",
-    "98:25:4a:cc:15:07": "TAPO Electric Vaccum",
-    "30:de:4b:81:67:95": "TAPO Electric Fish",
+    "98:25:4a:cc:15:07": "TAPO Vaccum",
+    "30:de:4b:81:67:95": "TAPO Fish",
     "38:2c:e5:0e:52:f5": "Plug HawHaw",
     "8c:87:d0:19:e9:7d": "Makan Sula",
     "3c:97:0e:e8:b6:7a": "ZimaOS",
@@ -73,6 +75,8 @@ CUSTOM_DEVICES = {
     "48:88:ca:69:3d:b2": "Lenovo K450",
     "50:0f:f5:90:7e:a8": "Tenda",
 }
+
+known_macs = set()
 
 def resolve_hostname(ip, mac):
     mac_lower = mac.lower()
@@ -100,6 +104,68 @@ def resolve_hostname(ip, mac):
         pass
 
     return "(Unknown Device)", False
+
+def scan_network():
+    device_list = []
+    try:
+        result = subprocess.check_output(["arp-scan", "--localnet"], text=True)
+        lines = result.split("\n")
+        ip_mac_pattern = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9a-fA-F:]{17})")
+        
+        for line in lines:
+            match = ip_mac_pattern.search(line)
+            if match:
+                ip = match.group(1)
+                mac = match.group(2)
+                
+                parts = line.split("\t")
+                vendor_oui = parts[2].strip() if len(parts) > 2 else ""
+                
+                device_name, is_custom = resolve_hostname(ip, mac)
+                
+                if not is_custom:
+                    if vendor_oui and vendor_oui != "(Unknown)":
+                        device_name = f"⚠️ UNKNOWN ({vendor_oui})"
+                    else:
+                        device_name = "⚠️ UNKNOWN DEVICE"
+
+                device_list.append({
+                    "ip": ip,
+                    "mac": mac,
+                    "name": device_name
+                })
+    except Exception as e:
+        print(f"Error scanning network: {e}")
+    return device_list
+
+def monitor_new_devices():
+    global known_macs
+    initial_devices = scan_network()
+    known_macs = {dev["mac"].lower() for dev in initial_devices}
+    
+    while True:
+        time.sleep(60)
+        current_devices = scan_network()
+        
+        for dev in current_devices:
+            mac_lower = dev["mac"].lower()
+            if mac_lower not in known_macs:
+                known_macs.add(mac_lower)
+                
+                if MY_CHAT_ID:
+                    notif_msg = (
+                        "🚨 *Perangkat Baru Terkoneksi!*\n\n"
+                        f"Nama : `{dev['name']}`\n"
+                        f"IP   : `{dev['ip']}`\n"
+                        f"MAC  : `{dev['mac']}`"
+                    )
+                    try:
+                        bot.send_message(MY_CHAT_ID, notif_msg, parse_mode="Markdown")
+                    except Exception as e:
+                        print(f"Gagal mengirim notifikasi: {e}")
+
+monitor_thread = threading.Thread(target=monitor_new_devices, daemon=True)
+monitor_thread.start()
 
 def get_ip_details():
     try:
@@ -146,52 +212,18 @@ def get_cpu_temp():
     return "Tidak dapat membaca sensor suhu CPU"
 
 def get_local_devices():
-    try:
-        result = subprocess.check_output(["arp-scan", "--localnet"], text=True)
-        lines = result.split("\n")
-        device_list = []
-        
-        ip_mac_pattern = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9a-fA-F:]{17})")
-        
-        for line in lines:
-            match = ip_mac_pattern.search(line)
-            if match:
-                ip = match.group(1)
-                mac = match.group(2)
-                
-                parts = line.split("\t")
-                vendor_oui = parts[2].strip() if len(parts) > 2 else ""
-                
-                device_name, is_custom = resolve_hostname(ip, mac)
-                
-                if not is_custom:
-                    if vendor_oui and vendor_oui != "(Unknown)":
-                        device_name = f"⚠️ UNKNOWN ({vendor_oui})"
-                    else:
-                        device_name = "⚠️ UNKNOWN DEVICE"
+    device_list = scan_network()
+    device_list.sort(key=lambda x: ipaddress.ip_address(x["ip"]))
 
-                device_list.append({
-                    "ip": ip,
-                    "mac": mac,
-                    "name": device_name
-                })
-        
-        device_list.sort(key=lambda x: ipaddress.ip_address(x["ip"]))
-
-        formatted_devices = []
-        for dev in device_list:
-            formatted_devices.append(
-                f"Nama : {dev['name']}\nIP   : {dev['ip']}\nMAC  : {dev['mac']}\n-----------------------"
-            )
-        
-        if formatted_devices:
-            return "==== Connected Devices ====\n" + "\n".join(formatted_devices)
-        return "Tidak ada perangkat lain yang terdeteksi di jaringan lokal."
-            
-    except subprocess.CalledProcessError:
-        return "Gagal memindai jaringan. Pastikan service dijalankan sebagai root."
-    except Exception as e:
-        return f"Terjadi kesalahan: {e}"
+    formatted_devices = []
+    for dev in device_list:
+        formatted_devices.append(
+            f"Nama : {dev['name']}\nIP   : {dev['ip']}\nMAC  : {dev['mac']}\n-----------------------"
+        )
+    
+    if formatted_devices:
+        return "==== Connected Devices ====\n" + "\n".join(formatted_devices)
+    return "Tidak ada perangkat lain yang terdeteksi di jaringan lokal."
 
 def get_uptime():
     uptime_seconds = time.time() - psutil.boot_time()
