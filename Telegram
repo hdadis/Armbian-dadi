@@ -24,7 +24,6 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 bot.delete_webhook()
 
-# Mendaftarkan menu pop-up otomatis ke Telegram (wajib huruf kecil)
 bot.set_my_commands([
     telebot.types.BotCommand("ipaddress", "Detail IP publik server"),
     telebot.types.BotCommand("devicesconnected", "Pemindaian perangkat di LAN"),
@@ -33,7 +32,44 @@ bot.set_my_commands([
 ])
 
 CUSTOM_DEVICES = {
-    "192.168.18.1": "Router / Gateway Utama",
+    "192.168.18.1": "Iconnet Router",
+    "c0:e3:fb:1a:e5:7f": "Iconnet",
+    "74:51:ba:0f:2e:e1": "Armbian",
+    "fc:9d:05:38:0a:2e": "MSI Mini PC",
+    "78:53:33:43:29:dc": "Xiaomi TV",
+    "58:20:71:ec:8a:28": "Samsung Dadi",
+    "c8:90:8a:71:ce:eb": "Samsung Ika",
+    "e8:a7:2f:0a:03:3e": "XBOX",
+    "7c:70:db:2b:35:b3": "Dell Ika",
+    "4c:bb:6f:5b:64:bc": "Infinix Aye",
+    "ac:a7:f1:33:3c:4e": "TAPO Living Room",
+    "f0:a7:31:36:78:db": "TAPO Kitchen",
+    "30:de:4b:a8:4d:44": "TAPO Kamar Ayel",
+    "30:de:4b:a8:55:5f": "TAPO Parkir",
+    "98:25:4a:cc:15:07": "TAPO Vaccum",
+    "30:de:4b:81:67:95": "TAPO Fish",
+    "38:2c:e5:0e:52:f5": "Plug HawHaw",
+    "8c:87:d0:19:e9:7d": "Makan Sula",
+    "3c:97:0e:e8:b6:7a": "ZimaOS",
+    "00:15:18:01:81:31": "HG680P / STB",
+    "cc:4d:75:96:b3:b8": "Air Purifier",
+    "9c:6b:00:15:1e:2f": "PC",
+    "58:85:e9:71:05:cf": "Realme Dadi",
+    "94:83:c4:2c:ae:7c": "GL-MT3000",
+    "44:46:87:80:6c:b1": "Realme Ika",
+    "d8:5d:e2:e6:c6:d1": "Laptop Ika",
+    "40:f0:2f:d5:f8:81": "Laptop Lenovo",
+    "30:8d:99:15:09:0e": "Laptop Hp",
+    "d0:03:df:11:7a:b5": "Tv Samsung",
+    "74:23:44:e4:6e:86": "MI 5",
+    "10:27:f5:44:60:c0": "TP-LINK USB",
+    "c4:23:60:99:fb:5b": "Asus Dadi",
+    "ca:6d:02:81:16:c7": "CasaOS",
+    "50:e4:78:07:4a:10": "Xiaomi TV 2",
+    "e0:51:d8:18:ce:f8": "Mini PC",
+    "10:2c:6b:7b:77:90": "AKARI AX512",
+    "48:88:ca:69:3d:b2": "Lenovo K450",
+    "50:0f:f5:90:7e:a8": "Tenda",
 }
 
 def resolve_hostname(ip, mac):
@@ -135,7 +171,6 @@ def get_local_devices():
                     "name": device_name
                 })
         
-        # Pengurutan numerik IP Address
         device_list.sort(key=lambda x: ipaddress.ip_address(x["ip"]))
 
         formatted_devices = []
@@ -200,24 +235,6 @@ def send_network_devices(message):
     bot.send_message(message.chat.id, f"`{hasil_jaringan}`", parse_mode="Markdown")
 
 bot.infinity_polling()
-EOF'
-
-# 5. Buat file konfigurasi systemd service
-sudo bash -c 'cat << "EOF" > /etc/systemd/system/armbianbot.service
-[Unit]
-Description=Telegram Bot Armbian Monitor
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/armbian-bot
-ExecStart=/root/armbian-bot/venv/bin/python3 /root/armbian-bot/bot.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
 EOF'
 
 # 6. Reload daemon, aktifkan, dan jalankan service
