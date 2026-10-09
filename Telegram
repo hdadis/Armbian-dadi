@@ -73,15 +73,15 @@ def get_ip_details():
         if data.get("status") == "success":
             return (
                 "==== IP Detail Information ====\n"
-                f"Country Name : {data.get(\x27country\x27, \x27\x27)}\n"
-                f"Country Code : {data.get(\x27countryCode\x27, \x27\x27)}\n"
-                f"Region       : {data.get(\x27region\x27, \x27\x27)}\n"
-                f"Region Name  : {data.get(\x27regionName\x27, \x27\x27)}\n"
-                f"City         : {data.get(\x27city\x27, \x27\x27)}\n"
-                f"Timezone     : {data.get(\x27timezone\x27, \x27\x27)}\n"
-                f"ISP          : {data.get(\x27isp\x27, \x27\x27)}\n"
-                f"AS           : {data.get(\x27as\x27, \x27\x27)}\n"
-                f"IP Address   : {data.get(\x27query\x27, \x27\x27)}"
+                f"Country Name : {data.get('country', '')}\n"
+                f"Country Code : {data.get('countryCode', '')}\n"
+                f"Region       : {data.get('region', '')}\n"
+                f"Region Name  : {data.get('regionName', '')}\n"
+                f"City         : {data.get('city', '')}\n"
+                f"Timezone     : {data.get('timezone', '')}\n"
+                f"ISP          : {data.get('isp', '')}\n"
+                f"AS           : {data.get('as', '')}\n"
+                f"IP Address   : {data.get('query', '')}"
             )
         else:
             msg = data.get("message", "Gagal mendapatkan data IP")
@@ -141,7 +141,7 @@ def get_local_devices():
         formatted_devices = []
         for dev in device_list:
             formatted_devices.append(
-                f"Nama : {dev[\x27name\x27]}\nIP   : {dev[\x27ip\x27]}\nMAC  : {dev[\x27mac\x27]}\n-----------------------"
+                f"Nama : {dev['name']}\nIP   : {dev['ip']}\nMAC  : {dev['mac']}\n-----------------------"
             )
         
         if formatted_devices:
