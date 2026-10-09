@@ -10,35 +10,6 @@ echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 yes | sudo apt install -y moc
 yes | sudo apt install -y gstreamer1.0-libav gstreamer1.0-plugins-ugly gstreamer1.0-plugins-ugly-multiverse
-yes | sudo apt install -y libasound2-plugin-equal ladspa-sdk swh-plugins
-
-# Buat konfigurasi ALSA (~/.asoundrc)
-echo "[2/4] Membuat konfigurasi ALSA (~/.asoundrc)..."
-cat << 'EOF' > ~/.asoundrc
-pcm.pitch432 {
-    type ladspa
-    slave.pcm "plug:default"
-    plugin "pitch_scale"
-    label "pitchScale"
-    input {
-        controls [ 0.981818 ] # Rasio 432 / 440 Hz
-    }
-}
-
-pcm.mocp432 {
-    type plug
-    slave.pcm "pitch432"
-}
-EOF
-
-# Buat folder dan konfigurasi MOCP (~/.moc/config)
-echo "[3/4] Mengatur konfigurasi MOCP (~/.moc/config)..."
-mkdir -p ~/.moc
-
-cat << 'EOF' > ~/.moc/config
-SoundDriver = ALSA
-ALSADevice = mocp432
-EOF
 
 mocp -S
 pactl info
