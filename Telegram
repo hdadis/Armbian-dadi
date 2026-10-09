@@ -22,14 +22,16 @@ import ipaddress
 BOT_TOKEN = "8656270122:AAFeiGHSn58eCDGY2pOQ2sNnQJZGPc-PJr0"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-bot.delete_webhook()
-
-bot.set_my_commands([
-    telebot.types.BotCommand("ipaddress", "Detail IP publik server"),
-    telebot.types.BotCommand("devicesconnected", "Pemindaian perangkat di LAN"),
-    telebot.types.BotCommand("armbianstatus", "Ringkasan lengkap status server"),
-    telebot.types.BotCommand("help", "Tampilkan bantuan menu")
-])
+try:
+    bot.delete_webhook()
+    bot.set_my_commands([
+        telebot.types.BotCommand("ipaddress", "Detail IP publik server"),
+        telebot.types.BotCommand("devicesconnected", "Pemindaian perangkat di LAN"),
+        telebot.types.BotCommand("armbianstatus", "Ringkasan lengkap status server"),
+        telebot.types.BotCommand("help", "Tampilkan bantuan menu")
+    ])
+except Exception as e:
+    print(f"Peringatan koneksi: {e}")
 
 CUSTOM_DEVICES = {
     "192.168.18.1": "Iconnet Router",
@@ -46,8 +48,8 @@ CUSTOM_DEVICES = {
     "f0:a7:31:36:78:db": "TAPO Kitchen",
     "30:de:4b:a8:4d:44": "TAPO Kamar Ayel",
     "30:de:4b:a8:55:5f": "TAPO Parkir",
-    "98:25:4a:cc:15:07": "TAPO Vaccum",
-    "30:de:4b:81:67:95": "TAPO Fish",
+    "98:25:4a:cc:15:07": "TAPO Electric Vaccum",
+    "30:de:4b:81:67:95": "TAPO Electric Fish",
     "38:2c:e5:0e:52:f5": "Plug HawHaw",
     "8c:87:d0:19:e9:7d": "Makan Sula",
     "3c:97:0e:e8:b6:7a": "ZimaOS",
@@ -75,9 +77,9 @@ CUSTOM_DEVICES = {
 def resolve_hostname(ip, mac):
     mac_lower = mac.lower()
     if mac_lower in CUSTOM_DEVICES:
-        return CUSTOM_DEVICES[mac_lower]
+        return CUSTOM_DEVICES[mac_lower], True
     if ip in CUSTOM_DEVICES:
-        return CUSTOM_DEVICES[ip]
+        return CUSTOM_DEVICES[ip], True
 
     try:
         nmb_out = subprocess.check_output(["nmblookup", "-A", ip], stderr=subprocess.DEVNULL, text=True, timeout=1)
@@ -85,7 +87,7 @@ def resolve_hostname(ip, mac):
             if "<00>" in line and not "GROUP" in line:
                 name = line.split()[0].strip()
                 if name:
-                    return name
+                    return name, False
     except Exception:
         pass
 
@@ -93,11 +95,11 @@ def resolve_hostname(ip, mac):
         dns_out = subprocess.check_output(["nslookup", ip], stderr=subprocess.DEVNULL, text=True, timeout=1)
         for line in dns_out.splitlines():
             if "name =" in line:
-                return line.split("name =")[1].strip().rstrip(".")
+                return line.split("name =")[1].strip().rstrip("."), False
     except Exception:
         pass
 
-    return "(Unknown Device)"
+    return "(Unknown Device)", False
 
 def get_ip_details():
     try:
@@ -160,10 +162,13 @@ def get_local_devices():
                 parts = line.split("\t")
                 vendor_oui = parts[2].strip() if len(parts) > 2 else ""
                 
-                device_name = resolve_hostname(ip, mac)
+                device_name, is_custom = resolve_hostname(ip, mac)
                 
-                if device_name == "(Unknown Device)" and vendor_oui and vendor_oui != "(Unknown)":
-                    device_name = f"Vendor: {vendor_oui}"
+                if not is_custom:
+                    if vendor_oui and vendor_oui != "(Unknown)":
+                        device_name = f"⚠️ UNKNOWN ({vendor_oui})"
+                    else:
+                        device_name = "⚠️ UNKNOWN DEVICE"
 
                 device_list.append({
                     "ip": ip,
