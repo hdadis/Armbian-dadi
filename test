@@ -1,43 +1,43 @@
 #!/bin/bash
 
-# Pastikan script dijalankan sebagai root (administrator)
-if [ "$EUID" -ne 0 ]; then
-  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
-  exit 1
-fi
+# Exit jika terjadi error
+set -e
 
-echo "Menginstal aplikasi..."
-# Ganti dengan paket yang ingin Anda install, contoh:
-sudo apt install mpd
-#UNDER THE AUDIO OUTPUT#
-sudo awk '
-/# Audio Output ################################################################/ {
-    print $0
-    print "#"
-    print "audio_output {"
-    print "    type            \"alsa\"  # or \"pulse\" depending on your setup"
-    print "    name            \"432Hz Output\""
-    print "    auto_resample   \"no\""
-    print "    "
-    print "    # Enable SoX and apply the pitch shift"
-    print "    # You can specify quality parameters if needed (e.g., -v -b 24)"
-    print "    format          \"44100:16:2\""
-    print "    mixer_type      \"software\""
-    print "    "
-    print "    # Use SoX for the pitch adjustment"
-    print "    # Note: Modern MPD versions require the sox plugin"
-    print "    # Alternatively, you can use the SoundTouch library if available in your build"
-    print "}"
-    print ""
-    print "# Define the resampler using SoX"
-    print "resampler {"
-    print "    plugin          \"sox\""
-    print "    quality         \"high\""
-    print "    # Additional SoX parameters can go here"
-    print "}"
-    next
+echo "=== Memulai Instalasi MOCP & ALSA Soundtouch Plugin ==="
+
+# 1. Update repository dan install paket yang dibutuhkan
+echo "[1/4] Menginstall paket dependencies..."
+sudo apt update
+sudo apt install -y moc alsa-utils libasound2-plugin-equal ladspa-sdk swh-plugins soundtouch
+
+# 2. Buat konfigurasi ALSA (~/.asoundrc)
+echo "[2/4] Membuat konfigurasi ALSA (~/.asoundrc)..."
+cat << 'EOF' > ~/.asoundrc
+pcm.pitch432 {
+    type ladspa
+    slave.pcm "plug:default"
+    plugin "pitch_scale"
+    label "pitchScale"
+    input {
+        controls [ 0.981818 ] # Rasio 432 / 440 Hz
+    }
 }
-{ print }
-' /etc/mpd.conf > /tmp/mpd.conf.tmp && sudo mv /tmp/mpd.conf.tmp /etc/mpd.conf
 
-echo "Instalasi selesai!"
+pcm.mocp432 {
+    type plug
+    slave.pcm "pitch432"
+}
+EOF
+
+# 3. Buat folder dan konfigurasi MOCP (~/.moc/config)
+echo "[3/4] Mengatur konfigurasi MOCP (~/.moc/config)..."
+mkdir -p ~/.moc
+
+cat << 'EOF' > ~/.moc/config
+SoundDriver = ALSA
+ALSADevice = mocp432
+EOF
+
+echo "[4/4] Selesai!"
+echo "=== Instalasi & Konfigurasi Selesai ==="
+echo "Untuk menjalankan MOCP, ketik perintah: mocp"
