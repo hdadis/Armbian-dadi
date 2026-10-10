@@ -7,7 +7,15 @@ echo "=== [1/5] Memperbarui sistem dan menginstal dependensi dasar ==="
 apt update
 apt install -y build-essential cmake pkg-config git libsqlite3-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
-    curl ffmpeg nodejs npm
+    curl ffmpeg
+
+echo "=== [1.5/5] Menginstal Node.js v22.x dan npm v10.x (Bawaan Node.js v22) ==="
+# Mengunduh dan menjalankan skrip setup NodeSource untuk Node.js v22
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt install -y nodejs
+
+# Memastikan npm menggunakan versi stabil terbaru untuk Node.js v22 (npm v10.x.x)
+npm install -g npm@latest
 
 echo "=== [2/5] Memeriksa instalasi Node.js dan npm ==="
 node_ver=$(node -v)
@@ -64,6 +72,7 @@ systemctl daemon-reload
 systemctl enable lightnvr
 systemctl restart lightnvr
 
+# Untuk Clear Cache supaya refresh
 sudo apt clean
 sudo apt autoremove -y
 npm cache clean --force
@@ -76,5 +85,3 @@ echo "====================================================="
 echo " Silakan akses dashboard melalui browser di alamat:"
 echo " http://$(hostname -I | awk '{print $1}'):8080"
 echo "====================================================="
-
-
