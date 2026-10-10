@@ -12,9 +12,7 @@ yes | sudo apt update -y
 yes | sudo apt-get install -y ntfsprogs
 yes | sudo apt-get install -y nfs-kernel-server
 
-sudo bash -c 'cat << "EOF" > /etc/exports
-/mnt/External/cctv 192.168.18.20(rw,sync,no_subtree_check,no_root_squash)
-EOF'
+sudo bash -c 'echo "/mnt/External/cctv 192.168.18.20(rw,sync,no_subtree_check,no_root_squash)" >> /etc/exports'
 sudo exportfs -a
 sudo systemctl restart nfs-kernel-server
 sudo systemctl enable nfs-kernel-server
