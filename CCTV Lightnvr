@@ -4,7 +4,7 @@
 set -e
 
 echo "=== [1/5] Memperbarui sistem dan menginstal dependensi dasar ==="
-apt update && apt upgrade -y
+apt update
 apt install -y build-essential cmake pkg-config git libsqlite3-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev curl
 
