@@ -83,3 +83,9 @@ echo "====================================================="
 echo " Instalasi Berhasil dan Selesai!"
 echo " Node.js, MediaMTX, dan Alijaya sudah terpasang."
 echo "====================================================="
+
+
+npm start
+sudo apt clean
+sudo apt autoremove -y
+npm cache clean --force
