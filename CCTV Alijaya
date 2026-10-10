@@ -1,4 +1,85 @@
-git clone https://github.com/alijayanet/cctv-monitoring.git
-cd cctv-monitoring
-chmod +x install.sh
-sudo bash install.sh 
+#!/bin/bash
+
+# Hentikan skrip jika ada error
+set -e
+
+echo "====================================================="
+echo "   INSTALASI ALIJAYA CCTV MONITORING (Node 20 / ARM64)"
+echo "====================================================="
+
+# 1. Alokasi Swap Memory (Mencegah npm install 'Killed' di STB RAM 1-2GB)
+echo "[1/6] Memeriksa dan menyiapkan Swap Memory..."
+if [ $(free -m | grep Swap | awk '{print $2}') -eq 0 ]; then
+    echo "Swap tidak ditemukan. Membuat Swap File 1.5GB untuk kelancaran install..."
+    fallocate -l 1.5G /swapfile_alijaya || dd if=/dev/zero of=/swapfile_alijaya bs=1M count=1536
+    chmod 600 /swapfile_alijaya
+    mkswap /swapfile_alijaya
+    swapon /swapfile_alijaya
+    echo "✔ Swap File 1.5GB berhasil diaktifkan."
+else
+    echo "✔ Swap Memory sudah aktif."
+fi
+
+# 2. Update Sistem & Install Paket Pendukung + FFmpeg
+echo "[2/6] Memperbarui sistem dan menginstal FFmpeg..."
+apt update && apt install -y ffmpeg curl wget tar git sudo net-tools build-essential
+
+# 3. Install Node.js v20 LTS & npm
+echo "[3/6] Menginstal Node.js v20 LTS..."
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+
+# Verifikasi Node.js
+NODE_VER=$(node -v)
+echo "✔ Node.js terinstal: $NODE_VER"
+
+# 4. Unduh dan Pasang MediaMTX (ARM64 / aarch64)
+echo "[4/6] Memasang MediaMTX untuk arsitektur ARM64..."
+MEDIAMTX_VER="v1.9.3"
+TAR_FILE="mediamtx_${MEDIAMTX_VER}_linux_arm64v8.tar.gz"
+
+rm -f $TAR_FILE
+wget -q "https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VER}/${TAR_FILE}"
+
+tar -xvf $TAR_FILE mediamtx > /dev/null
+mv mediamtx /usr/local/bin/
+chmod +x /usr/local/bin/mediamtx
+rm -f $TAR_FILE
+
+# Verifikasi MediaMTX
+if command -v mediamtx &> /dev/null; then
+    echo "✔ MediaMTX berhasil terpasang di /usr/local/bin/mediamtx"
+else
+    echo "❌ Gagal menginstal MediaMTX."
+    exit 1
+fi
+
+# 5. Menyiapkan Repository Alijaya CCTV Monitoring
+echo "[5/6] Mengunduh skrip dan paket Alijaya..."
+if [ -d "cctv-monitoring" ]; then
+    echo "Folder cctv-monitoring sudah ada. Memperbarui repository..."
+    cd cctv-monitoring
+    git pull
+else
+    git clone https://github.com/alijayanet/cctv-monitoring.git
+    cd cctv-monitoring
+fi
+
+# Install dependensi Node.js secara aman
+echo "Menginstal paket npm (proses ini membutuhkan waktu beberapa menit)..."
+npm install --prefer-offline --no-audit
+
+# 6. Menjalankan Skrip Bawaan Alijaya
+echo "[6/6] Memulai konfigurasi Alijaya..."
+if [ -f "install.sh" ]; then
+    chmod +x install.sh
+    ./install.sh
+elif [ -f "setup.sh" ]; then
+    chmod +x setup.sh
+    ./setup.sh
+fi
+
+echo "====================================================="
+echo " Instalasi Berhasil dan Selesai!"
+echo " Node.js, MediaMTX, dan Alijaya sudah terpasang."
+echo "====================================================="
