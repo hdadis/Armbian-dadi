@@ -22,5 +22,6 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 sudo apt clean
 sudo apt autoremove -y
 npm cache clean --force
+df -h /
 
 echo "Instalasi selesai!"
