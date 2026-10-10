@@ -10,7 +10,16 @@ echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
 yes | sudo apt update -y
 yes | sudo apt-get install -y ntfsprogs
-yes | sudo apt-get install -y ntfs-3g
+yes | sudo apt-get install -y nfs-kernel-server
+
+sudo bash -c 'cat << "EOF" > /etc/exports
+/mnt/External/cctv 192.168.18.20(rw,sync,no_subtree_check,no_root_squash)
+EOF'
+sudo exportfs -a
+sudo systemctl restart nfs-kernel-server
+sudo systemctl enable nfs-kernel-server
+sudo mount -v -t nfs 192.168.18.2:/mnt/External/cctv /root/motioneye/storage
+
 sudo ntfsfix /dev/sda1
 sudo gedit fstab
 mkdir /mnt/External
