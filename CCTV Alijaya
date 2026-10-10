@@ -86,11 +86,12 @@ echo "====================================================="
 
 
 npm start
-sudo apt clean
-sudo apt autoremove -y
-npm cache clean --force
 npm install -g pm2
 cd ~/cctv-monitoring
 pm2 start index.js --name cctv-ai
 pm2 startup
 pm2 save
+
+sudo apt clean
+sudo apt autoremove -y
+npm cache clean --force
