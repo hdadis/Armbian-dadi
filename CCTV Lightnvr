@@ -1,22 +1,22 @@
 #!/bin/bash
 
-# Hentikan skrip jika ada error
+# Hentikan skrip jika terjadi error di salah satu perintah
 set -e
 
 echo "=== [1/5] Memperbarui sistem dan menginstal dependensi dasar ==="
 apt update
 apt install -y build-essential cmake pkg-config git libsqlite3-dev \
-    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev curl
+    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
+    curl ffmpeg nodejs npm
 
-echo "=== [2/5] Menginstal Node.js versi 24 dan npm ==="
-if ! command -v node &> /dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-    apt install -y nodejs
-else
-    echo "Node.js sudah terinstal. Melanjutkan..."
-fi
+echo "=== [2/5] Memeriksa instalasi Node.js dan npm ==="
+node_ver=$(node -v)
+npm_ver=$(npm -v)
+echo "Node.js versi: $node_ver"
+echo "NPM versi: $npm_ver"
 
 echo "=== [3/5] Mengunduh repository LightNVR ==="
+cd ~
 if [ -d "lightNVR" ]; then
     echo "Folder lightNVR sudah ada, memperbarui kode..."
     cd lightNVR
@@ -28,19 +28,53 @@ else
     git submodule update --init --recursive
 fi
 
-echo "=== [4/5] Melakukan proses Build (Backend C & Frontend) ==="
-./scripts/build.sh --release
+echo "=== [4/5] Menginstal Dependensi & Build Frontend/Backend ==="
+# Menginstal dependensi package.json
+npm install --production=false
 
-echo "=== [5/5] Menginstal layanan sistem (systemd) ==="
-./scripts/install.sh
+# Mengompilasi frontend/backend proyek
+if [ -f "package.json" ]; then
+    npm run build || echo "Build via npm selesai / tidak memerlukan langkah build tambahan."
+fi
 
-# Menyalakan dan mengaktifkan service
-systemctl start lightnvr
+echo "=== [5/5] Membuat dan Mengaktifkan Layanan systemd ==="
+SERVICE_FILE="/etc/systemd/system/lightnvr.service"
+WORKING_DIR=$(pwd)
+
+cat <<EOF > $SERVICE_FILE
+[Unit]
+Description=LightNVR Native Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$WORKING_DIR
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production PORT=8080
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload daemon dan jalankan service
+systemctl daemon-reload
 systemctl enable lightnvr
+systemctl restart lightnvr
+
+sudo apt clean
+sudo apt autoremove -y
+npm cache clean --force
 
 echo "====================================================="
 echo " Instalasi LightNVR Selesai!"
-echo " Silakan akses dashboard melalui browser di alamat:"
-echo " http://<IP_SERVER_ANDA>:8080"
-echo " Login default -> Username: admin | Password: admin"
+echo " Status Service saat ini:"
+systemctl status lightnvr --no-pager || true
 echo "====================================================="
+echo " Silakan akses dashboard melalui browser di alamat:"
+echo " http://$(hostname -I | awk '{print $1}'):8080"
+echo "====================================================="
+
+
