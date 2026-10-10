@@ -7,16 +7,16 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "=================================================="
-echo " Memulai Instalasi Otomatis MotionEye (Port 8080)"
+echo " Setup MotionEye (IP: 192.168.18.20) + NFS Storage"
 echo "=================================================="
 
-# 2. Update indeks paket dasar saja (tanpa upgrade sistem)
-echo "[1/4] Memperbarui indeks paket..."
+# 2. Update indeks paket dan install nfs-common
+echo "[1/5] Memperbarui paket & menginstal utilitas NFS..."
 apt-get update -y
-apt-get install -y curl
+apt-get install -y curl nfs-common
 
 # 3. Install Docker jika belum ada
-echo "[2/4] Menginstal Docker & Docker Compose..."
+echo "[2/5] Menginstal Docker & Docker Compose..."
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
@@ -27,16 +27,32 @@ if ! docker compose version &> /dev/null; then
     apt-get install -y docker-compose-plugin
 fi
 
-# 4. Buat folder direktori kerja dan storage
-echo "[3/4] Membuat direktori MotionEye..."
+# 4. Siapkan Direktori Lokal & Mount Network Storage (NFS)
+echo "[3/5] Menghubungkan Network Storage (NFS)..."
+STORAGE_DIR="/root/motioneye/storage"
+mkdir -p "$STORAGE_DIR"
+
+# Cek apakah folder sudah ter-mount, jika belum lakukan mount
+if ! mountpoint -q "$STORAGE_DIR"; then
+    mount -t nfs 192.168.18.2:/mnt/External/cctv "$STORAGE_DIR"
+    
+    # Tambahkan ke /etc/fstab agar auto-mount permanen saat STB direstart
+    if ! grep -q "192.168.18.2:/mnt/External/cctv" /etc/fstab; then
+        echo "192.168.18.2:/mnt/External/cctv $STORAGE_DIR nfs defaults 0 0" >> /etc/fstab
+    fi
+else
+    echo "Network storage sudah ter-mount sebelumnya."
+fi
+
+# 5. Buat folder direktori konfigurasi aplikasi
+echo "[4/5] Menyiapkan direktori aplikasi MotionEye..."
 INSTALL_DIR="/root/motioneye"
 mkdir -p "$INSTALL_DIR/config"
-mkdir -p "$INSTALL_DIR/storage"
 cd "$INSTALL_DIR"
 
-# 5. Tulis file docker-compose.yml dengan port 8080
-echo "[4/4] Membuat file docker-compose.yml..."
-cat << 'EOF' > docker-compose.yml
+# 6. Tulis file docker-compose.yml secara otomatis
+echo "[5/5] Membuat file docker-compose.yml..."
+cat << EOF > docker-compose.yml
 version: '3.8'
 
 services:
@@ -50,26 +66,26 @@ services:
       - TZ=Asia/Jakarta
     volumes:
       - ./config:/etc/motioneye
-      - ./storage:/var/lib/motioneye
+      - $STORAGE_DIR:/var/lib/motioneye
     privileged: true
 EOF
 
-# Perbaiki izin akses folder penyimpanan
-chmod -R 777 "$INSTALL_DIR/config" "$INSTALL_DIR/storage"
+# Perbaiki izin akses folder config
+chmod -R 777 "$INSTALL_DIR/config"
 
-# 6. Jalankan Docker Compose
-echo "Mengunduh dan menjalankan MotionEye..."
+# 7. Jalankan Docker Compose
+echo "Menjalankan kontainer MotionEye..."
 docker compose pull
 docker compose up -d
 
-# Dapatkan IP Lokal STB
-IP_ADDR=$(hostname -I | awk '{print $1}')
-
 echo "=================================================="
-echo " Instalasi Selesai!"
-echo " Akses MotionEye di browser: http://${IP_ADDR}:8080"
-echo " Username default : admin"
-echo " Password default : (kosongkan)"
+echo " Instalasi Selesai & Berhasil Dikonfigurasi!"
+echo "--------------------------------------------------"
+echo " IP MotionEye STB     : 192.168.18.20"
+echo " Network Storage      : 192.168.18.2:/mnt/External/cctv"
+echo " Akses Web MotionEye  : http://192.168.18.20:8080"
+echo " Username default     : admin"
+echo " Password default     : (kosongkan)"
 echo "=================================================="
 
 # Tampilkan log kontainer
