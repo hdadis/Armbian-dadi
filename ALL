@@ -19,6 +19,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Telegram)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Shinobi)"
 
-
+sudo apt clean
+sudo apt autoremove -y
+npm cache clean --force
 
 echo "Instalasi selesai!"
