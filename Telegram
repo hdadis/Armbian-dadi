@@ -27,10 +27,10 @@ bot = telebot.TeleBot(BOT_TOKEN)
 try:
     bot.delete_webhook()
     bot.set_my_commands([
-        telebot.types.BotCommand("ipaddress", "Detail IP publik server"),
-        telebot.types.BotCommand("devicesconnected", "Pemindaian perangkat di LAN"),
-        telebot.types.BotCommand("armbianstatus", "Ringkasan lengkap status server"),
-        telebot.types.BotCommand("help", "Tampilkan bantuan menu")
+        telebot.types.BotCommand("ipaddress", "IP"),
+        telebot.types.BotCommand("devicesconnected", "Devices"),
+        telebot.types.BotCommand("armbianstatus", "Status"),
+        telebot.types.BotCommand("run", "Terminal"),
     ])
 except Exception as e:
     print(f"Peringatan koneksi: {e}")
@@ -271,7 +271,41 @@ def send_network_devices(message):
     hasil_jaringan = get_local_devices()
     bot.send_message(message.chat.id, f"`{hasil_jaringan}`", parse_mode="Markdown")
 
+@bot.message_handler(commands=["run", "Run"])
+def execute_shell_command(message):
+    if str(message.chat.id) != MY_CHAT_ID:
+        bot.reply_to(message, "â›” Anda tidak memiliki akses untuk menjalankan perintah ini.")
+        return
+    
+    command_text = message.text.replace("/run", "").replace("/Run", "").strip()
+    if not command_text:
+        bot.reply_to(message, "âš ï¸ Masukkan perintah yang ingin dijalankan.\nContoh: `/run apt update`", parse_mode="Markdown")
+        return
+    
+    # Otomatis tambahkan --no-pager jika menggunakan systemctl agar tidak nyangkut
+    if "systemctl" in command_text and "--no-pager" not in command_text:
+        command_text += " --no-pager"
+    
+    bot.reply_to(message, f"âš™ï¸ Menjalankan: `{command_text}`...", parse_mode="Markdown")
+    
+    try:
+        output = subprocess.check_output(command_text, shell=True, stderr=subprocess.STDOUT, text=True, timeout=30)
+        if not output.strip():
+            output = "(Perintah berhasil dieksekusi tanpa output)"
+    except subprocess.TimeoutExpired:
+        output = "âŒ Error: Proses memakan waktu terlalu lama (timeout)."
+    except subprocess.CalledProcessError as e:
+        output = f"âŒ Error (Exit Code {e.returncode}):\n{e.output}"
+    except Exception as e:
+        output = f"âŒ Terjadi kesalahan: {e}"
+    
+    if len(output) > 4000:
+        output = output[:4000] + "\n... (output dipotong karena terlalu panjang)"
+        
+    bot.send_message(message.chat.id, f"ðŸ’» *Output Terminal:*\n```{output}```", parse_mode="Markdown")
+
 bot.infinity_polling()
+
 EOF'
 
 # 6. Reload daemon, aktifkan, dan jalankan service
