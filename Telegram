@@ -1,5 +1,5 @@
 # 1. Update paket & install dependencies pendukung
-sudo apt update && sudo apt install python3 python3-pip python3-venv arp-scan -y
+sudo apt install python3 python3-pip python3-venv arp-scan -y
 
 # 2. Buat folder direktori kerja di /root
 sudo mkdir -p /root/armbian-bot && cd /root/armbian-bot
