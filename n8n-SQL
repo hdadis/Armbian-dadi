@@ -7,7 +7,13 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-sudo apt-get update && apt-get install -y curl build-essential python3 python3-pip software-properties-common
+sudo tee /etc/apt/sources.list.d/dadi.list > /dev/null << 'EOF'
+deb [arch=armhf,arm64] https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/ALL jammy main
+EOF
+
+sudo apt update -o Dir::Etc::sourcelist="sources.list.d/dadi.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+
+apt-get install -y curl build-essential python3 python3-pip software-properties-common
 
 echo "=== 2. Menginstal Node.js v20 (LTS) ==="
 curl -fsSL https://deb.nodesource.com/setup_22.23.3 | bash -
