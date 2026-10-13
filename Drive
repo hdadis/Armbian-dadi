@@ -8,8 +8,8 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-yes | sudo apt-get install -y ntfsprogs
-yes | sudo apt-get install -y nfs-kernel-server
+yes | sudo apt-get install --no-install-recommends -y ntfsprogs
+yes | sudo apt-get install --no-install-recommends -y nfs-kernel-server
 
 sudo bash -c 'echo "/mnt/External/cctv 192.168.18.20(rw,sync,no_subtree_check,no_root_squash)" >> /etc/exports'
 sudo exportfs -a
