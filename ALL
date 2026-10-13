@@ -8,13 +8,7 @@ fi
 
 echo "Menginstall aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
-
-sudo tee /etc/apt/sources.list.d/dadi.list > /dev/null << 'EOF'
-deb [arch=armhf,arm64] https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/ALL jammy main
-EOF
-
-sudo apt update -o Dir::Etc::sourcelist="sources.list.d/dadi.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
-
+sudo apt-get update
 yes | bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Drive)" -y
 yes | bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Adguard)" -y
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Samba2)"
@@ -27,8 +21,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Shinobi)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Fix_Shinobi)"
 
-
-sudo apt clean
+sudo apt-get clean
+sudo apt-get autoclean
+sudo apt-get autoremove
 sudo apt autoremove -y
 npm cache clean --force
 df -h /
