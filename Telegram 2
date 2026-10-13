@@ -178,7 +178,7 @@ def get_ip_details():
         
         if data.get("status") == "success":
             return (
-                "==== IP Detail Information ====\n"
+                "==== IP Detail Informations ====\n"
                 f"Country Name : {data.get('country', '')}\n"
                 f"Country Code : {data.get('countryCode', '')}\n"
                 f"Region       : {data.get('region', '')}\n"
@@ -215,7 +215,6 @@ def get_cpu_temp():
 
 def get_local_devices():
     device_list = scan_network()
-    # Mengamankan pengurutan IP jika list kosong atau format tidak valid
     try:
         device_list.sort(key=lambda x: ipaddress.ip_address(x["ip"]))
     except Exception:
@@ -235,7 +234,134 @@ def get_uptime():
     uptime_seconds = time.time() - psutil.boot_time()
     days, remainder = divmod(uptime_seconds, 86400)
     hours, remainder = divmod(remainder, 3600)
-    minutes, seconds = divmod(remainder, 60
+    minutes, seconds = divmod(remainder, 60)
+    return f"{int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s"
+
+@bot.message_handler(commands=["start", "Start", "help", "Help"])
+def send_welcome(message):
+    menu = (
+        "🤖 *Armbian Bot Ready!*\n\n"
+        "Perintah yang tersedia:\n"
+        "➡️ /ipaddress - Detail IP publik server\n"
+        "➡️ /devicesconnected - Pemindaian perangkat di LAN\n"
+        "➡️ /armbianstatus - Ringkasan lengkap status server\n"
+        "➡️ /run <perintah> - Jalankan perintah terminal\n"
+        "➡️ /cleancache - Bersihkan APT, NPM & cek disk\n"
+        "➡️ /restartservices - Restart service smbd & cups"
+    )
+    bot.reply_to(message, menu, parse_mode="Markdown")
+
+@bot.message_handler(commands=["armbianstatus", "ArmbianStatus"])
+def send_status(message):
+    suhu = get_cpu_temp()
+    ram = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    uptime = get_uptime()
+    
+    status_msg = (
+        "📊 *Armbian Status*\n\n"
+        f"⏱️ *Uptime:* `{uptime}`\n"
+        f"🌡️ *Suhu CPU:* `{suhu}`\n"
+        f"🧠 *RAM:* `{ram.percent}%` ({ram.used // (1024**2)}MB / {ram.total // (1024**2)}MB)\n"
+        f"💾 *Disk:* `{disk.percent}%` ({disk.free // (1024**3)}GB Free)\n"
+    )
+    bot.send_message(message.chat.id, status_msg, parse_mode="Markdown")
+
+@bot.message_handler(commands=["ipaddress", "IPAddress"])
+def send_ip_details(message):
+    bot.reply_to(message, "⏳ Sedang mengambil data IP...")
+    hasil_ip = get_ip_details()
+    bot.send_message(message.chat.id, f"`{hasil_ip}`", parse_mode="Markdown")
+
+@bot.message_handler(commands=["devicesconnected", "DevicesConnected"])
+def send_network_devices(message):
+    bot.reply_to(message, "🔍 Sedang memindai jaringan lokal, mohon tunggu...")
+    hasil_jaringan = get_local_devices()
+    bot.send_message(message.chat.id, f"`{hasil_jaringan}`", parse_mode="Markdown")
+
+@bot.message_handler(commands=["run", "Run"])
+def execute_shell_command(message):
+    if str(message.chat.id) != MY_CHAT_ID:
+        bot.reply_to(message, "⛔ Anda tidak memiliki akses untuk menjalankan perintah ini.")
+        return
+    
+    command_text = message.text.replace("/run", "").replace("/Run", "").strip()
+    if not command_text:
+        bot.reply_to(message, "⚠️ Masukkan perintah yang ingin dijalankan.\nContoh: `/run apt update`", parse_mode="Markdown")
+        return
+    
+    if "systemctl" in command_text and "--no-pager" not in command_text:
+        command_text += " --no-pager"
+    
+    bot.reply_to(message, f"⚙️ Menjalankan: `{command_text}`...", parse_mode="Markdown")
+    
+    try:
+        output = subprocess.check_output(command_text, shell=True, stderr=subprocess.STDOUT, text=True, timeout=60)
+        if not output.strip():
+            output = "(Perintah berhasil dieksekusi tanpa output)"
+    except subprocess.TimeoutExpired:
+        output = "❌ Error: Proses memakan waktu terlalu lama (timeout)."
+    except subprocess.CalledProcessError as e:
+        output = f"❌ Error (Exit Code {e.returncode}):\n{e.output}"
+    except Exception as e:
+        output = f"❌ Terjadi kesalahan: {e}"
+    
+    if len(output) > 4000:
+        output = output[:4000] + "\n... (output dipotong karena terlalu panjang)"
+        
+    bot.send_message(message.chat.id, f"💻 *Output Terminal:*\n```{output}```", parse_mode="Markdown")
+
+@bot.message_handler(commands=["cleancache", "CleanCache"])
+def execute_clean_cache(message):
+    if str(message.chat.id) != MY_CHAT_ID:
+        bot.reply_to(message, "⛔ Anda tidak memiliki akses untuk menjalankan perintah ini.")
+        return
+    
+    command_text = "sudo apt-get clean && sudo apt-get autoclean && sudo apt-get autoremove -y && sudo apt autoremove -y && npm cache clean --force && df -h /"
+    bot.reply_to(message, "⚙️ Menjalankan pembersihan sistem menyeluruh...", parse_mode="Markdown")
+    
+    try:
+        output = subprocess.check_output(command_text, shell=True, stderr=subprocess.STDOUT, text=True, timeout=90)
+        if not output.strip():
+            output = "(Perintah berhasil dieksekusi tanpa output)"
+    except subprocess.TimeoutExpired:
+        output = "❌ Error: Proses memakan waktu terlalu lama (timeout)."
+    except subprocess.CalledProcessError as e:
+        output = f"❌ Error (Exit Code {e.returncode}):\n{e.output}"
+    except Exception as e:
+        output = f"❌ Terjadi kesalahan: {e}"
+    
+    if len(output) > 4000:
+        output = output[:4000] + "\n... (output dipotong karena terlalu panjang)"
+        
+    bot.send_message(message.chat.id, f"💻 *Hasil Pembersihan Menyeluruh:*\n```{output}```", parse_mode="Markdown")
+
+@bot.message_handler(commands=["restartservices", "RestartServices"])
+def execute_restart_services(message):
+    if str(message.chat.id) != MY_CHAT_ID:
+        bot.reply_to(message, "⛔ Anda tidak memiliki akses untuk menjalankan perintah ini.")
+        return
+    
+    command_text = "sudo service smbd restart && sudo service cups restart"
+    bot.reply_to(message, "⚙️ Me-restart service `smbd` dan `cups`...", parse_mode="Markdown")
+    
+    try:
+        output = subprocess.check_output(command_text, shell=True, stderr=subprocess.STDOUT, text=True, timeout=30)
+        if not output.strip():
+            output = "✅ Service smbd & cups berhasil direstart tanpa error!"
+    except subprocess.TimeoutExpired:
+        output = "❌ Error: Proses memakan waktu terlalu lama (timeout)."
+    except subprocess.CalledProcessError as e:
+        output = f"❌ Error (Exit Code {e.returncode}):\n{e.output}"
+    except Exception as e:
+        output = f"❌ Terjadi kesalahan: {e}"
+    
+    if len(output) > 4000:
+        output = output[:4000] + "\n... (output dipotong karena terlalu panjang)"
+        
+    bot.send_message(message.chat.id, f"💻 *Hasil Restart Service:*\n```{output}```", parse_mode="Markdown")
+
+bot.infinity_polling()
 
 EOF'
 
