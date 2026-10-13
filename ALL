@@ -8,6 +8,13 @@ fi
 
 echo "Menginstall aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
+
+sudo tee /etc/apt/sources.list.d/dadi.list > /dev/null << 'EOF'
+deb [arch=armhf,arm64] https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/ALL jammy main
+EOF
+
+sudo apt update -o Dir::Etc::sourcelist="sources.list.d/dadi.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+
 yes | bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Drive)" -y
 yes | bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Adguard)" -y
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Samba2)"
