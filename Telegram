@@ -313,11 +313,11 @@ def execute_clean_cache(message):
         bot.reply_to(message, "⛔ Anda tidak memiliki akses untuk menjalankan perintah ini.")
         return
     
-    command_text = "sudo apt clean && sudo apt autoremove -y && npm cache clean --force && df -h /"
-    bot.reply_to(message, "⚙️ Menjalankan pembersihan sistem otomatis...", parse_mode="Markdown")
+    command_text = "sudo apt-get clean && sudo apt-get autoclean && sudo apt-get autoremove -y && sudo apt autoremove -y && npm cache clean --force && df -h /"
+    bot.reply_to(message, "⚙️ Menjalankan pembersihan sistem menyeluruh...", parse_mode="Markdown")
     
     try:
-        output = subprocess.check_output(command_text, shell=True, stderr=subprocess.STDOUT, text=True, timeout=60)
+        output = subprocess.check_output(command_text, shell=True, stderr=subprocess.STDOUT, text=True, timeout=90)
         if not output.strip():
             output = "(Perintah berhasil dieksekusi tanpa output)"
     except subprocess.TimeoutExpired:
@@ -330,7 +330,7 @@ def execute_clean_cache(message):
     if len(output) > 4000:
         output = output[:4000] + "\n... (output dipotong karena terlalu panjang)"
         
-    bot.send_message(message.chat.id, f"💻 *Hasil Pembersihan:*\n```{output}```", parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"💻 *Hasil Pembersihan Menyeluruh:*\n```{output}```", parse_mode="Markdown")
 
 @bot.message_handler(commands=["restartservices", "RestartServices"])
 def execute_restart_services(message):
@@ -358,7 +358,27 @@ def execute_restart_services(message):
     bot.send_message(message.chat.id, f"💻 *Hasil Restart Service:*\n```{output}```", parse_mode="Markdown")
 
 bot.infinity_polling()
+
 EOF'
+
+# 5. Buat file armbianbot.service lengkap
+sudo bash -c 'cat << "EOF" > /etc/systemd/system/armbianbot.service
+[Unit]
+Description=Armbian Telegram Bot Monitor
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/armbian-bot
+ExecStart=/root/armbian-bot/venv/bin/python3 /root/armbian-bot/bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+EOF'
+
 
 # 6. Reload daemon, aktifkan, dan jalankan service
 sudo systemctl daemon-reload
