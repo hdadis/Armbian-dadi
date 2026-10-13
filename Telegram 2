@@ -10,7 +10,6 @@ sudo /root/armbian-bot/venv/bin/pip install pyTelegramBotAPI requests psutil
 
 # 4. Buat file bot.py lengkap dengan pengodean UTF-8 & perintah lengkap
 sudo bash -c 'cat << "EOF" > /root/armbian-bot/bot.py
-# -*- coding: utf-8 -*-
 import telebot
 import requests
 import os
@@ -31,7 +30,6 @@ try:
         telebot.types.BotCommand("ipaddress", "IP"),
         telebot.types.BotCommand("armbianstatus", "Status"),
         telebot.types.BotCommand("devicesconnected", "Devices"),
-        telebot.types.BotCommand("run", "Jalankan perintah terminal sistem"),
         telebot.types.BotCommand("cleancache", "Pembersihan lengkap sistem & cek disk"),
         telebot.types.BotCommand("restartservices", "Restart service smbd & cups"),
     ])
