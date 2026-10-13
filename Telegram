@@ -10,6 +10,7 @@ sudo /root/armbian-bot/venv/bin/pip install pyTelegramBotAPI requests psutil
 
 # 4. Buat file bot.py lengkap
 sudo bash -c 'cat << "EOF" > /root/armbian-bot/bot.py
+# -*- coding: utf-8 -*-
 import telebot
 import requests
 import os
