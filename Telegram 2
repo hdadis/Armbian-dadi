@@ -178,7 +178,7 @@ def get_ip_details():
         
         if data.get("status") == "success":
             return (
-                "==== IP Detail Information ====\n"
+                "==== IP Detail Informations ====\n"
                 f"Country Name : {data.get('country', '')}\n"
                 f"Country Code : {data.get('countryCode', '')}\n"
                 f"Region       : {data.get('region', '')}\n"
