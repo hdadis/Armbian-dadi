@@ -8,6 +8,7 @@ fi
 
 echo "Menginstal aplikasi..."
 # Ganti dengan paket yang ingin Anda install, contoh:
+sudo apt-get update
 yes | sudo apt-get install -y ntfsprogs
 yes | sudo apt-get install -y nfs-kernel-server
 
