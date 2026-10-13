@@ -21,7 +21,7 @@ import time
 import threading
 import ipaddress
 
-BOT_TOKEN = "8656270122:AAFeiGHSn58eCDGY2pOQ2sNnQJZGPc-PJr0"
+BOT_TOKEN = "8925352963:AAFg0YIbYgL5d4Wd90HoH25qB62ytnTAZXw"
 MY_CHAT_ID = "509387708"
 bot = telebot.TeleBot(BOT_TOKEN)
 
