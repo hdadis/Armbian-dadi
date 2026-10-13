@@ -47,7 +47,7 @@ CUSTOM_DEVICES = {
     "c8:90:8a:71:ce:eb": "Samsung Ika",
     "e8:a7:2f:0a:03:3e": "XBOX",
     "7c:70:db:2b:35:b3": "Dell Ika",
-    "4c:bb:6f:5b:64:bc": "Infinix Aye",
+    "4c:bb:6f:5b:64:bc": "Infinix Ayel",
     "ac:a7:f1:33:3c:4e": "TAPO Living Room",
     "f0:a7:31:36:78:db": "TAPO Kitchen",
     "30:de:4b:a8:4d:44": "TAPO Kamar Ayel",
@@ -178,7 +178,7 @@ def get_ip_details():
         
         if data.get("status") == "success":
             return (
-                "==== IP Detail Informations ====\n"
+                "==== IP Detail Information ====\n"
                 f"Country Name : {data.get('country', '')}\n"
                 f"Country Code : {data.get('countryCode', '')}\n"
                 f"Region       : {data.get('region', '')}\n"
@@ -271,13 +271,13 @@ def send_status(message):
 def send_ip_details(message):
     bot.reply_to(message, "⏳ Sedang mengambil data IP...")
     hasil_ip = get_ip_details()
-    bot.send_message(message.chat.id, f"`{hasil_ip}`", parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"```{hasil_ip}```", parse_mode="Markdown")
 
 @bot.message_handler(commands=["devicesconnected", "DevicesConnected"])
 def send_network_devices(message):
     bot.reply_to(message, "🔍 Sedang memindai jaringan lokal, mohon tunggu...")
     hasil_jaringan = get_local_devices()
-    bot.send_message(message.chat.id, f"`{hasil_jaringan}`", parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"```{hasil_jaringan}```", parse_mode="Markdown")
 
 @bot.message_handler(commands=["run", "Run"])
 def execute_shell_command(message):
