@@ -6,34 +6,36 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo "=== 0. Membersihkan instalasi lama secara total (Fresh Clean) ==="
-# Hentikan proses PM2 jika sedang berjalan
-pm2 delete n8n 2>/dev/null || true
-pm2 kill 2>/dev/null || true
-
-# Hapus folder NVM dan folder global n8n/pm2 sebelumnya
-rm -rf /root/.nvm
-rm -rf /root/.npm
-rm -rf /root/.pm2
-rm -rf /root/n8n
-
-# Purge paket Node.js, npm, dan dependensi terkait dari sistem apt
-apt-get purge -y nodejs npm nodejs-doc 2>/dev/null || true
-apt-get autoremove -y
-apt-get clean
-
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-apt-get update
+sudo tee /etc/apt/sources.list.d/dadi.list > /dev/null << 'EOF'
+deb [arch=armhf,arm64] https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/ALL jammy main
+EOF
+
+sudo apt update -o Dir::Etc::sourcelist="sources.list.d/dadi.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+
 apt-get install -y curl build-essential python3 python3-pip software-properties-common git
 
-echo "=== 2. Menginstal Node.js v22.x (LTS terbaru) via NodeSource ==="
-# Tambahkan repository NodeSource resmi untuk Node.js v22
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+echo "=== 2. Menginstal Node.js v20.9.0 (LTS) via NVM ==="
+# Install NVM untuk user root
+export NVM_DIR="/root/.nvm"
+if [ ! -d "$NVM_DIR" ]; then
+  curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+fi
 
-# Install Node.js dan npm secara global
-apt-get install -y nodejs
+# Load NVM
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-# Verifikasi instalasi Node.js & npm
+# Install Node.js v20.9.0 dan set sebagai default
+nvm install 20.9.0
+nvm alias default 20.9.0
+nvm use 20.9.0
+
+# Buat symlink agar binary node & npm bisa diakses secara global oleh root dan PM2
+ln -sf $(which node) /usr/bin/node
+ln -sf $(which npm) /usr/bin/npm
+ln -sf $(which npx) /usr/bin/npx
+
+# Verifikasi instalasi Node.js
 node -v
 npm -v
 
@@ -41,11 +43,11 @@ echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via npm ==="
 # Konfigurasi npm agar lebih stabil saat mendownload paket
 npm config set maxsockets 50
 
-# Menggunakan npm install -g agar binary n8n & pm2 langsung masuk ke PATH sistem
+# Menggunakan npm install -g langsung agar binary n8n & pm2 langsung masuk ke PATH sistem
 npm install -g pm2 n8n@1.94.0 --unsafe-perm
 
-# Verifikasi instalasi PM2
-pm2 -v
+# Buat symlink untuk pm2 jika dijalankan via env root/systemd
+ln -sf $(which pm2) /usr/bin/pm2
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n/downloads
@@ -57,10 +59,13 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
 echo "=== 6. Menjalankan n8n dengan PM2 ==="
+# Hapus instance lama jika ada
+pm2 delete n8n 2>/dev/null || true
+
 # Pindah ke direktori /root/n8n agar file .env otomatis ter-load oleh n8n
 cd /root/n8n
 
-# Jalankan n8n via PM2
+# Cari lokasi path biner n8n secara tepat dan jalankan via PM2
 N8N_BIN=$(which n8n)
 pm2 start "$N8N_BIN" --name "n8n"
 
