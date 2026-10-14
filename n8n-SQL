@@ -13,11 +13,27 @@ EOF
 
 sudo apt update -o Dir::Etc::sourcelist="sources.list.d/dadi.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
 
-apt-get install -y curl build-essential python3 python3-pip software-properties-common
+apt-get install -y curl build-essential python3 python3-pip software-properties-common git
 
-echo "=== 2. Menginstal Node.js v20 (LTS) ==="
-curl -fsSL https://deb.nodesource.com/setup_22.23.3 | bash -
-sudo apt-get install -y nodejs
+echo "=== 2. Menginstal Node.js v20.9.0 (LTS) via NVM ==="
+# Install NVM untuk user root
+export NVM_DIR="/root/.nvm"
+if [ ! -d "$NVM_DIR" ]; then
+  curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+fi
+
+# Load NVM
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+# Install Node.js v20.9.0 dan set sebagai default
+nvm install 20.9.0
+nvm alias default 20.9.0
+nvm use 20.9.0
+
+# Buat symlink agar binary node & npm bisa diakses secara global oleh root dan PM2
+ln -sf $(which node) /usr/bin/node
+ln -sf $(which npm) /usr/bin/npm
+ln -sf $(which npx) /usr/bin/npx
 
 # Verifikasi instalasi Node.js
 node -v
@@ -25,10 +41,13 @@ npm -v
 
 echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via npm ==="
 # Konfigurasi npm agar lebih stabil saat mendownload paket
-sudo npm config set maxsockets 50
+npm config set maxsockets 50
 
 # Menggunakan npm install -g langsung agar binary n8n & pm2 langsung masuk ke PATH sistem
-sudo npm install -g pm2 n8n@1.94.0 --unsafe-perm
+npm install -g pm2 n8n@1.94.0 --unsafe-perm
+
+# Buat symlink untuk pm2 jika dijalankan via env root/systemd
+ln -sf $(which pm2) /usr/bin/pm2
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n/downloads
