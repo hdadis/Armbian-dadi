@@ -6,18 +6,31 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+echo "=== 0. Membersihkan instalasi lama secara total (Fresh Clean) ==="
+# Hentikan proses PM2 jika sedang berjalan
+pm2 delete n8n 2>/dev/null || true
+pm2 kill 2>/dev/null || true
+
+# Hapus folder NVM dan folder global n8n/pm2 sebelumnya
+rm -rf /root/.nvm
+rm -rf /root/.npm
+rm -rf /root/.pm2
+rm -rf /root/n8n
+
+# Purge paket Node.js, npm, dan dependensi terkait dari sistem apt
+apt-get purge -y nodejs npm nodejs-doc 2>/dev/null || true
+apt-get autoremove -y
+apt-get clean
+
 echo "=== 1. Menginstal dependensi dasar sistem ==="
 apt-get update
 apt-get install -y curl build-essential python3 python3-pip software-properties-common git
 
-echo "=== 2. Menginstal Node.js v20.x (LTS) via NodeSource ==="
-# Hapus instalasi node/npm lama jika ada untuk mencegah konflik
-apt-get remove -y nodejs npm nodejs-doc 2>/dev/null || true
+echo "=== 2. Menginstal Node.js v22.x (LTS terbaru) via NodeSource ==="
+# Tambahkan repository NodeSource resmi untuk Node.js v22
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 
-# Tambahkan repository NodeSource resmi untuk Node.js v20
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-
-# Install Node.js (sudah termasuk npm di dalamnya) secara global
+# Install Node.js dan npm secara global
 apt-get install -y nodejs
 
 # Verifikasi instalasi Node.js & npm
@@ -44,13 +57,10 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
 echo "=== 6. Menjalankan n8n dengan PM2 ==="
-# Hapus instance lama jika ada
-pm2 delete n8n 2>/dev/null || true
-
 # Pindah ke direktori /root/n8n agar file .env otomatis ter-load oleh n8n
 cd /root/n8n
 
-# Cari lokasi path biner n8n secara tepat dan jalankan via PM2
+# Jalankan n8n via PM2
 N8N_BIN=$(which n8n)
 pm2 start "$N8N_BIN" --name "n8n"
 
