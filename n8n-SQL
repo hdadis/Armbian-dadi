@@ -21,7 +21,7 @@ node -v
 npm -v
 
 echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via npm ==="
-npm install -g pm2 n8n@1.94.0
+npm install -g pm2 n8n@1.102.1
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n/downloads
