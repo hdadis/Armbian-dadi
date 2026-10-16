@@ -10,7 +10,7 @@ fi
 set -e
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-apt-get update && apt-get install -y curl build-essential python3 python3-pip software-properties-common
+apt-get update && apt-get install -y curl build-essential git python3 python3-pip software-properties-common
 
 echo "=== 2. Menginstal Node.js v20 (LTS) ==="
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -20,8 +20,8 @@ apt-get install -y nodejs
 node -v
 npm -v
 
-echo "=== 3. Menginstal PM2 dan n8n v1.102.1 via npm ==="
-npm install -g pm2 n8n@1.102.1
+echo "=== 3. Menginstal PM2 dan n8n v1.94.0 via npm ==="
+sudo npm install -g pm2 n8n@1.94.0 --verbose
 
 echo "=== 4. Menyiapkan konfigurasi environment n8n ==="
 mkdir -p /root/n8n/downloads
