@@ -20,6 +20,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 yes | bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Telegram)" -y
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Shinobi)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Fix_Shinobi)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/REFRESH)"
+
 
 sudo apt-get clean
 sudo apt-get autoclean
