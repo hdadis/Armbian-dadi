@@ -1,0 +1,168 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+# Hentikan script jika terjadi error pada perintah penting
+set -e
+
+# Lokasi swap sementara
+SWAP_FILE="/swapfile_temp"
+
+# Fungsi otomatis untuk menghapus swap sementara & mengembalikan ke default
+cleanup_swap() {
+  if [ -f "$SWAP_FILE" ]; then
+    echo "=== Mengembalikan konfigurasi Swap ke default (Menghapus Swap Sementara) ==="
+    swapoff "$SWAP_FILE" 2>/dev/null || true
+    rm -f "$SWAP_FILE"
+    echo "Swap sementara berhasil dihapus. Sisa ruang eMMC kembali normal."
+  fi
+}
+
+# Pasang trap: Jika script selesai ATAU terhenti karena error, swap sementara otomatis dihapus
+trap cleanup_swap EXIT
+
+echo "=== 1. Menginstal dependensi dasar sistem ==="
+apt-get update && apt-get install -y curl build-essential git python3 python3-pip software-properties-common
+apt-get clean
+
+echo "=== 2. Menginstal Node.js v20 (LTS) ==="
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+apt-get clean
+
+# Verifikasi instalasi Node.js
+node -v
+npm -v
+
+echo "=== 3. Membuat Swap Sementara (1.5 GB) untuk HG680P RAM 1GB ==="
+swapoff "$SWAP_FILE" 2>/dev/null || true
+rm -f "$SWAP_FILE"
+
+dd if=/dev/zero of="$SWAP_FILE" bs=1M count=1536 status=progress
+chmod 600 "$SWAP_FILE"
+mkswap "$SWAP_FILE"
+swapon "$SWAP_FILE"
+free -h
+
+echo "=== 4. Menginstal PM2 dan n8n v1.94.0 via npm ==="
+# Bersihkan sisa folder n8n yang sempat gagal sebelumnya
+rm -rfv /usr/lib/node_modules/n8n /usr/local/lib/node_modules/n8n
+npm cache clean --force
+
+# Instal PM2 terlebih dahulu
+npm install -g pm2 --no-audit --no-fund
+
+# Instal n8n dengan pembatasan RAM Node.js (768MB) dan koneksi tunggal
+NODE_OPTIONS="--max-old-space-size=768" npm install -g n8n@1.94.0 --maxsockets=1 --no-audit --no-fund --verbose
+
+echo "=== 5. Menghapus Swap Sementara (Kembali ke Default Swap) ==="
+cleanup_swap
+
+echo "=== 6. Membuat File Konfigurasi .env & Folder Downloads ==="
+# Buat folder di /root/n8n/downloads dan /home/node/downloads agar kompatibel dengan N8N_DOWNLOAD_PATH
+mkdir -p /root/n8n/downloads
+mkdir -p /home/node
+ln -sfn /root/n8n/downloads /home/node/downloads
+cd /root/n8n
+
+# Tulis langsung konfigurasi .env tanpa mengunduh dari GitHub
+cat << 'EOT' > /root/n8n/.env
+# --- Network & IP Config ---
+N8N_HOST=0.0.0.0
+N8N_LISTEN_ADDRESS=0.0.0.0
+N8N_PORT=5678
+
+# --- URL Config ---
+# WEBHOOK_URL digunakan agar webhook penerima data mengarah ke domain publik
+WEBHOOK_URL=https://ai.balai.my.id/
+
+# --- Cookie Security ---
+# Set ke false agar IP lokal (HTTP) tidak terblokir warning "secure cookie"
+N8N_SECURE_COOKIE=false
+
+# --- Environment Variable Custom ---
+N8N_DOWNLOAD_PATH=/home/node/downloads
+
+# Menentukan berapa jam data eksekusi disimpan (5 jam)
+EXECUTIONS_DATA_MAX_AGE=5
+
+# Menentukan jumlah maksimal eksekusi yang disimpan (15 riwayat)
+EXECUTIONS_DATA_PRUNE_MAX_COUNT=15
+
+# Mengaktifkan penghapusan otomatis
+EXECUTIONS_DATA_PRUNE=true
+
+# --- Optimasi Tambahan Khusus STB HG680P (RAM 1GB & eMMC 8GB) ---
+# Simpan file binary di disk (bukan di RAM) agar STB tidak hang saat proses file
+N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+# Matikan telemetri & pengecekan update latar belakang agar hemat RAM/CPU
+N8N_DIAGNOSTICS_ENABLED=false
+N8N_VERSION_NOTIFICATIONS_ENABLED=false
+EOT
+
+echo "=== 7. Menginstal Cloudflared ==="
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
+
+# Hapus service lama jika ada sebelum install baru
+cloudflared service uninstall 2>/dev/null || true
+cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
+
+echo "=== 8. Menjalankan n8n dengan PM2 & Mengatur Pembersih Otomatis ==="
+pm2 delete n8n 2>/dev/null || true
+
+# Muat isi file .env ke environment sistem agar 100% terbaca oleh PM2 dan n8n
+set -a
+source /root/n8n/.env
+set +a
+
+# Jalankan n8n dengan batas memori 700MB dan simpan variabel environment-nya
+N8N_BIN=$(which n8n)
+pm2 start "$N8N_BIN" --name "n8n" --max-memory-restart 700M --node-args="--max-old-space-size=700" --update-env
+
+# Pasang pembatas ukuran log PM2
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 2
+pm2 set pm2-logrotate:compress true
+
+# Simpan konfigurasi PM2 agar bertahan saat reboot
+pm2 save
+env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root || true
+
+# Buat perintah "clean-stb" agar nanti bisa dipanggil kapan saja cukup ketik: clean-stb
+cat << 'EOF' > /usr/local/bin/clean-stb
+#!/bin/bash
+echo "Membersihkan file downloads, cache sistem, log, dan melegakan RAM..."
+rm -rf /root/n8n/downloads/* /home/node/downloads/* 2>/dev/null || true
+find /root/.n8n/binaryData -type f -mtime +0 -delete 2>/dev/null || true
+apt-get clean
+apt-get autoclean -y
+apt-get autoremove -y --purge
+npm cache clean --force
+rm -rf /root/.npm /root/.cache /root/.node-gyp /tmp/* /var/tmp/*
+journalctl --vacuum-size=20M
+pm2 flush
+sync && echo 3 > /proc/sys/vm/drop_caches
+echo "=== Status Penyimpanan & RAM Saat Ini ==="
+df -h /
+free -h
+EOF
+chmod +x /usr/local/bin/clean-stb
+
+# Pasang juga ke jadwal harian otomatis (Cronjob setiap hari)
+ln -sf /usr/local/bin/clean-stb /etc/cron.daily/n8n-cleaner
+
+echo "=== 9. Membersihkan Seluruh Cache Pasca-Instalasi ==="
+# Hapus kompilator yang sudah tidak terpakai setelah instalasi n8n selesai (hemat ~350MB)
+apt-get purge -y build-essential python3-pip
+rm -rf /var/lib/apt/lists/*
+
+# Jalankan pembersihan menyeluruh
+/usr/local/bin/clean-stb
+
+echo "=== Instalasi & Optimasi Selesai ==="
+pm2 status
