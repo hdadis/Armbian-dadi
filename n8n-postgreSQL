@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================
-#  n8n + PostgreSQL (native) + PM2  -  LOW-RAM (HG680P 1GB) v2
+#  n8n + PostgreSQL + PM2 + Cloudflared + Auto-Cleaner - LOW-RAM (HG680P 1GB) v3
 #  Aman dijalankan ulang (idempotent): secret tidak berubah.
 #  Jalankan sebagai user biasa (BUKAN root):  bash install-n8n.sh
 # =====================================================================
@@ -8,23 +8,28 @@ set -eu
 
 # ------------------------- KONFIGURASI -------------------------------
 DOMAIN="ai.balai.my.id"
+LOCAL_IP="192.168.18.20"
 DB_NAME="n8n"
 DB_USER="n8n_user"
 PROJECT_DIR="/var/www/n8n"
-N8N_VERSION="latest"          # sebaiknya di-pin, mis. "1.123.0", setelah cek halaman rilis n8n
-NODE_MAJOR="22"               # Node 20 sudah EOL
+N8N_VERSION="latest"          # Bisa di-pin, misal "1.85.4"
+NODE_MAJOR="22"               # Node 22 LTS
 SWAP_SIZE="1G"                # dibuat hanya jika belum ada swap
-HEAP_MB="256"                 # V8 heap n8n
-RESTART_MB="600"              # PM2 restart jika RSS melewati ini
-# 127.0.0.1 = hanya reverse proxy di mesin ini yang bisa akses (disarankan).
-# Ganti ke 0.0.0.0 HANYA jika proxy/tunnel ada di mesin lain.
+HEAP_MB="400"                 # V8 heap n8n (aman untuk RAM 1GB)
+RESTART_MB="520"              # PM2 restart jika RSS melewati ini
+MAX_FILES=15                  # Maksimal jumlah file unduhan/binary sebelum dihapus semua
+
+# 0.0.0.0 agar bisa diakses langsung via http://192.168.18.20:5678 sekaligus via Nginx/Cloudflared
 LISTEN_ADDRESS="0.0.0.0"
-SETUP_NGINX="true"           # true = pasang Nginx (HTTP :80) sebagai reverse proxy
-SECURE_COOKIE="false"          # butuh akses via HTTPS. Set false jika masih akses via http://IP:5678
+SETUP_NGINX="true"            # true = pasang Nginx (HTTP :80) sebagai reverse proxy lokal
+SECURE_COOKIE="false"         # Wajib false agar login via http://192.168.18.20:5678 berfungsi
+
+# Token Cloudflare Tunnel
+CF_TOKEN="eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9"
 # ---------------------------------------------------------------------
 
 echo "=================================================="
-echo "   n8n + PostgreSQL LOW-RAM Setup (v2)            "
+echo "   n8n + PostgreSQL LOW-RAM Setup (v3 - HG680P)   "
 echo "=================================================="
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -33,12 +38,13 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 ENV_FILE="$PROJECT_DIR/.env"
+N8N_USER_DIR="$HOME/.n8n"
 
-# [0/7] Swap (penting: npm install n8n di 1GB RAM sering OOM tanpa swap)
-echo "[0/7] Memeriksa swap..."
+# [0/9] Swap (penting: npm install n8n di 1GB RAM sering OOM tanpa swap)
+echo "[0/9] Memeriksa swap..."
 if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
     echo "  Tidak ada swap, membuat /swapfile ($SWAP_SIZE)..."
-    sudo fallocate -l "$SWAP_SIZE" /swapfile
+    sudo fallocate -l "$SWAP_SIZE" /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024
     sudo chmod 600 /swapfile
     sudo mkswap /swapfile
     sudo swapon /swapfile
@@ -49,23 +55,24 @@ else
     echo "  Swap sudah ada, dilewati."
 fi
 
-# [1/7] Dependensi sistem
-echo "[1/7] Menginstal dependensi sistem..."
+# [1/9] Dependensi sistem
+echo "[1/9] Menginstal dependensi sistem..."
 sudo apt update -y
 sudo apt install -y postgresql postgresql-contrib curl git build-essential \
-    ca-certificates gnupg python3 openssl
+    ca-certificates gnupg python3 openssl cron
 
-# [2/7] Node.js + PM2 + n8n
-echo "[2/7] Menginstal Node.js $NODE_MAJOR, PM2 & n8n@$N8N_VERSION..."
+# [2/9] Node.js + PM2 + n8n
+echo "[2/9] Menginstal Node.js $NODE_MAJOR, PM2 & n8n@$N8N_VERSION..."
 curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
 sudo apt install -y nodejs
 node -v
 npm -v
-sudo npm install -g pm2 "n8n@${N8N_VERSION}" --unsafe-perm
+# Batasi RAM saat npm install agar STB tidak freeze/hang
+sudo NODE_OPTIONS="--max-old-space-size=512" npm install -g pm2 "n8n@${N8N_VERSION}" --unsafe-perm --no-audit --no-fund
 n8n --version
 
-# [3/7] Secret (dipertahankan jika sudah ada)
-echo "[3/7] Menyiapkan secret..."
+# [3/9] Secret (dipertahankan jika sudah ada)
+echo "[3/9] Menyiapkan secret..."
 sudo mkdir -p "$PROJECT_DIR"
 sudo chown -R "$USER":"$USER" "$PROJECT_DIR"
 
@@ -76,20 +83,18 @@ if [ -f "$ENV_FILE" ]; then
     ENCRYPTION_KEY=$(grep '^N8N_ENCRYPTION_KEY=' "$ENV_FILE" | cut -d= -f2- || true)
     cp "$ENV_FILE" "$ENV_FILE.bak"
 fi
-# Jika .env hilang tapi n8n pernah jalan, pakai key lama agar credential tetap terbaca
-if [ -z "$ENCRYPTION_KEY" ] && [ -f "$HOME/.n8n/config" ]; then
-    ENCRYPTION_KEY=$(grep -o '"encryptionKey": *"[^"]*"' "$HOME/.n8n/config" | sed 's/.*: *"\(.*\)"/\1/' || true)
+if [ -z "$ENCRYPTION_KEY" ] && [ -f "$N8N_USER_DIR/config" ]; then
+    ENCRYPTION_KEY=$(grep -o '"encryptionKey": *"[^"]*"' "$N8N_USER_DIR/config" | sed 's/.*: *"\(.*\)"/\1/' || true)
 fi
 [ -n "$DB_PASS" ] || DB_PASS=$(openssl rand -hex 16)
 [ -n "$ENCRYPTION_KEY" ] || ENCRYPTION_KEY=$(openssl rand -hex 24)
 
-# [4/7] PostgreSQL
-echo "[4/7] Menyiapkan & men-tuning PostgreSQL..."
+# [4/9] PostgreSQL
+echo "[4/9] Menyiapkan & men-tuning PostgreSQL..."
 sudo systemctl enable --now postgresql
 
 sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
-# Selalu sinkronkan password dengan yang ada di .env
 sudo -u postgres psql -c "ALTER USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';"
 
 sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || \
@@ -98,7 +103,7 @@ sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
 sudo -u postgres psql -d "$DB_NAME" -c "GRANT ALL ON SCHEMA public TO $DB_USER;"
 
-# ALTER SYSTEM -> ditulis ke postgresql.auto.conf, idempotent, tanpa sed
+# Tuning hemat RAM untuk PostgreSQL di 1GB RAM
 sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '24MB';"
 sudo -u postgres psql -c "ALTER SYSTEM SET work_mem = '2MB';"
 sudo -u postgres psql -c "ALTER SYSTEM SET maintenance_work_mem = '16MB';"
@@ -106,8 +111,8 @@ sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = 20;"
 sudo -u postgres psql -c "ALTER SYSTEM SET effective_cache_size = '96MB';"
 sudo systemctl restart postgresql
 
-# [5/7] File .env
-echo "[5/7] Menulis $ENV_FILE ..."
+# [5/9] File .env
+echo "[5/9] Menulis $ENV_FILE ..."
 if [ "$SECURE_COOKIE" = "true" ]; then COOKIE_VAL="true"; else COOKIE_VAL="false"; fi
 
 cat > "$ENV_FILE" << EOF
@@ -138,10 +143,14 @@ N8N_ENCRYPTION_KEY=$ENCRYPTION_KEY
 GENERIC_TIMEZONE=Asia/Jakarta
 TZ=Asia/Jakarta
 
-# --- Hemat memori ---
+# --- Hemat memori & Disk (Penting untuk HG680P) ---
+N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+N8N_PAYLOAD_SIZE_MAX=15
+EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+EXECUTIONS_DATA_SAVE_ON_ERROR=all
 EXECUTIONS_DATA_PRUNE=true
-EXECUTIONS_DATA_MAX_AGE=72
-EXECUTIONS_DATA_PRUNE_MAX_COUNT=1000
+EXECUTIONS_DATA_MAX_AGE=5
+EXECUTIONS_DATA_PRUNE_MAX_COUNT=200
 N8N_METRICS=false
 N8N_LOG_LEVEL=warn
 N8N_RUNNERS_ENABLED=false
@@ -151,8 +160,8 @@ chmod 600 "$ENV_FILE"
 
 echo ">>> Kunci enkripsi n8n (simpan baik-baik): $ENCRYPTION_KEY"
 
-# [6/7] Jalankan via PM2
-echo "[6/7] Menjalankan n8n via PM2..."
+# [6/9] Jalankan via PM2
+echo "[6/9] Menjalankan n8n via PM2..."
 cd "$PROJECT_DIR"
 
 set -a
@@ -160,7 +169,6 @@ set -a
 . "$ENV_FILE"
 set +a
 
-# delete + start (bukan restart) supaya node-args & env baru pasti terpakai
 pm2 delete n8n >/dev/null 2>&1 || true
 pm2 start "$(command -v n8n)" --name n8n \
     --interpreter node \
@@ -171,15 +179,15 @@ pm2 save
 sudo env PATH="$PATH:/usr/bin" pm2 startup systemd -u "$USER" --hp "$HOME" >/dev/null || true
 pm2 save
 
-# [7/7] Nginx (opsional)
+# [7/9] Nginx & Cloudflared Tunnel
 if [ "$SETUP_NGINX" = "true" ]; then
-    echo "[7/7] Menyiapkan Nginx..."
+    echo "[7/9] Menyiapkan Nginx..."
     sudo apt install -y nginx
     sudo tee /etc/nginx/sites-available/n8n >/dev/null << EOF
 server {
     listen 80;
-    server_name $DOMAIN;
-    client_max_body_size 16m;
+    server_name $DOMAIN $LOCAL_IP _;
+    client_max_body_size 15m;
 
     location / {
         proxy_pass http://127.0.0.1:5678;
@@ -189,7 +197,7 @@ server {
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 300s;
         proxy_buffering off;
     }
@@ -198,10 +206,94 @@ EOF
     sudo ln -sf /etc/nginx/sites-available/n8n /etc/nginx/sites-enabled/n8n
     sudo rm -f /etc/nginx/sites-enabled/default
     sudo nginx -t && sudo systemctl reload nginx
-    echo "  Nginx melayani HTTP :80. Untuk HTTPS gunakan Cloudflare (proxy) atau: sudo apt install certbot python3-certbot-nginx && sudo certbot --nginx -d $DOMAIN"
-else
-    echo "[7/7] Nginx dilewati (SETUP_NGINX=false). Pastikan reverse proxy/tunnel mengarah ke 127.0.0.1:5678."
 fi
+
+echo "[7b/9] Memasang & Mengonfigurasi Cloudflared Service..."
+if ! command -v cloudflared >/dev/null 2>&1; then
+    echo "  Mengunduh binary cloudflared untuk arsitektur $(dpkg --print-architecture)..."
+    ARCH=$(dpkg --print-architecture)
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" -o /tmp/cloudflared.deb
+    sudo dpkg -i /tmp/cloudflared.deb
+    rm -f /tmp/cloudflared.deb
+fi
+
+sudo cloudflared service uninstall 2>/dev/null || true
+sudo cloudflared service install "$CF_TOKEN"
+sudo systemctl enable --now cloudflared
+
+# [8/9] Auto-Cleaner: Hapus semua file setiap 5 jam & batasi maks 15 file
+echo "[8/9] Menyiapkan Auto-Cleaner (Reset tiap 5 jam & Maks $MAX_FILES file)..."
+mkdir -p "$N8N_USER_DIR/binaryData" "$HOME/Downloads" "$PROJECT_DIR/downloads"
+
+sudo tee /usr/local/bin/n8n-cleaner.sh >/dev/null << EOF
+#!/bin/bash
+# Script pembersih otomatis agar STB HG680P tetap fresh dan ringan
+MODE="\${1:-check}"
+MAX_FILES=$MAX_FILES
+
+DIRS=(
+    "$N8N_USER_DIR/binaryData"
+    "$HOME/Downloads"
+    "$PROJECT_DIR/downloads"
+)
+
+clean_all_files() {
+    for d in "\${DIRS[@]}"; do
+        if [ -d "\$d" ]; then
+            find "\$d" -mindepth 1 -delete 2>/dev/null || true
+        fi
+    done
+    # Bersihkan file sementara di /tmp yang berumur lebih dari 10 menit
+    find /tmp -mindepth 1 -mmin +10 -not -name "systemd-*" -delete 2>/dev/null || true
+    # Flush log PM2 agar tidak membengkak di eMMC
+    su - "$USER" -c "pm2 flush >/dev/null 2>&1" || true
+}
+
+if [ "\$MODE" = "force" ]; then
+    # Dipanggil setiap 5 jam: hapus semua file tanpa terkecuali
+    clean_all_files
+    # Drop OS pagecache agar RAM kembali lega
+    sync; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true
+else
+    # Mode check (dipanggil tiap 10 menit): hitung total file, jika > 15 hapus semua
+    TOTAL_FILES=0
+    for d in "\${DIRS[@]}"; do
+        if [ -d "\$d" ]; then
+            COUNT=\$(find "\$d" -type f 2>/dev/null | wc -l)
+            TOTAL_FILES=\$((TOTAL_FILES + COUNT))
+        fi
+    done
+
+    if [ "\$TOTAL_FILES" -gt "\$MAX_FILES" ]; then
+        clean_all_files
+    fi
+fi
+EOF
+
+sudo chmod +x /usr/local/bin/n8n-cleaner.sh
+
+# Pasang jadwal ke /etc/cron.d/n8n-cleaner
+sudo tee /etc/cron.d/n8n-cleaner >/dev/null << EOF
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# 1. Setiap 5 jam: Hapus paksa semua file unduhan/tersimpan, tmp, dan flush log
+0 */5 * * * root /usr/local/bin/n8n-cleaner.sh force >/dev/null 2>&1
+
+# 2. Setiap 10 menit: Cek jumlah file, jika lebih dari $MAX_FILES file langsung hapus semua
+*/10 * * * * root /usr/local/bin/n8n-cleaner.sh check >/dev/null 2>&1
+EOF
+sudo chmod 644 /etc/cron.d/n8n-cleaner
+sudo systemctl enable --now cron
+
+# [9/9] Pembersihan Cache Sistem & NPM
+echo "[9/9] Membersihkan sampah apt & cache npm..."
+sudo apt-get clean
+sudo apt-get autoclean
+sudo apt-get autoremove -y
+sudo apt autoremove -y
+npm cache clean --force
+sudo npm cache clean --force
 
 # Tunggu n8n siap (start pertama di ARM + migrasi DB bisa 1-3 menit)
 echo "Menunggu n8n siap (maks 3 menit)..."
@@ -213,10 +305,17 @@ done
 
 echo "=================================================="
 if [ "$READY" = "yes" ]; then
-    echo " n8n BERJALAN. Buka: https://$DOMAIN/ (buat akun owner pertama)"
+    echo " n8n BERJALAN & SIAP DIGUNAKAN!"
+    echo " - Akses Lokal  : http://$LOCAL_IP:5678"
+    echo " - Akses Publik : https://$DOMAIN/"
 else
     echo " n8n belum merespons. Cek log:  pm2 logs n8n --lines 50"
 fi
-pm2 status
+echo "--------------------------------------------------"
+echo " Status Storage & Memori Saat Ini:"
+df -h /
+echo "--------------------------------------------------"
 free -h
+echo "--------------------------------------------------"
+pm2 status
 echo "=================================================="
