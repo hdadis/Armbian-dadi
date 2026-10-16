@@ -133,7 +133,7 @@ pm2 set pm2-logrotate:compress true
 pm2 save
 env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root || true
 
-echo "=== 9. Mengatur Pembersih Otomatis (Downloads: Maks 5 Jam / 15 File & Clear Cache) ==="
+echo "=== 9. Mengatur Pembersih Otomatis (Downloads: Maks 5 Jam / 15 File & Clear Cache Aman) ==="
 # A. Buat script pembatas folder downloads (Maksimal 5 jam & Maksimal 15 file)
 cat << 'EOF' > /usr/local/bin/limit-downloads
 #!/bin/bash
@@ -160,7 +160,7 @@ chmod 644 /etc/cron.d/n8n-download-limiter
 systemctl enable cron 2>/dev/null || true
 systemctl restart cron 2>/dev/null || true
 
-# B. Buat perintah "clean-stb" untuk pembersihan menyeluruh (Harian & Bisa Dipanggil Manual)
+# B. Buat perintah "clean-stb" untuk pembersihan menyeluruh (AMAN: Melindungi /root/.cache/n8n)
 cat << 'EOF' > /usr/local/bin/clean-stb
 #!/bin/bash
 echo "Menjalankan pembersihan cache sistem, log, downloads, dan melegakan RAM..."
@@ -169,7 +169,9 @@ apt-get clean
 apt-get autoclean -y
 apt-get autoremove -y --purge
 npm cache clean --force
-rm -rf /root/.npm /root/.cache /root/.node-gyp /tmp/* /var/tmp/*
+# Hapus cache umum KECUALI folder .cache/n8n agar frontend n8n tetap aman
+find /root/.cache -mindepth 1 ! -regex '^/root/\.cache/n8n\(/.*\)?' -delete 2>/dev/null || true
+rm -rf /root/.npm /root/.node-gyp /tmp/* /var/tmp/*
 journalctl --vacuum-size=20M
 pm2 flush
 sync && echo 3 > /proc/sys/vm/drop_caches
