@@ -12,7 +12,7 @@ set -e
 # Lokasi swap sementara
 SWAP_FILE="/swapfile_temp"
 
-# Fungsi otomatis untuk menghapus swap sementara & mengembalikan ke default
+# Fungsi otomatis untuk menghapus swap sementara & mengembalikan ke default Armbian (zram)
 cleanup_swap() {
   if [ -f "$SWAP_FILE" ]; then
     echo "=== Mengembalikan konfigurasi Swap ke default (Menghapus Swap Sementara) ==="
@@ -26,7 +26,7 @@ cleanup_swap() {
 trap cleanup_swap EXIT
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-apt-get update && apt-get install -y curl build-essential git python3 python3-pip software-properties-common
+apt-get update && apt-get install -y curl build-essential git python3 python3-pip software-properties-common cron
 apt-get clean
 
 echo "=== 2. Menginstal Node.js v20 (LTS) ==="
@@ -59,17 +59,17 @@ npm install -g pm2 --no-audit --no-fund
 # Instal n8n dengan pembatasan RAM Node.js (768MB) dan koneksi tunggal
 NODE_OPTIONS="--max-old-space-size=768" npm install -g n8n@1.94.0 --maxsockets=1 --no-audit --no-fund --verbose
 
-echo "=== 5. Menghapus Swap Sementara (Kembali ke Default Swap) ==="
+echo "=== 5. Menghapus Swap Sementara (Kembali ke Default Swap Armbian) ==="
 cleanup_swap
 
 echo "=== 6. Membuat File Konfigurasi .env & Folder Downloads ==="
-# Buat folder di /root/n8n/downloads dan /home/node/downloads agar kompatibel dengan N8N_DOWNLOAD_PATH
+# Buat folder di /root/n8n/downloads dan /home/node/downloads (dihubungkan via symlink)
 mkdir -p /root/n8n/downloads
 mkdir -p /home/node
 ln -sfn /root/n8n/downloads /home/node/downloads
 cd /root/n8n
 
-# Tulis langsung konfigurasi .env tanpa mengunduh dari GitHub
+# Tulis langsung konfigurasi .env
 cat << 'EOT' > /root/n8n/.env
 # --- Network & IP Config ---
 N8N_HOST=0.0.0.0
@@ -111,7 +111,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 cloudflared service uninstall 2>/dev/null || true
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
-echo "=== 8. Menjalankan n8n dengan PM2 & Mengatur Pembersih Otomatis ==="
+echo "=== 8. Menjalankan n8n dengan PM2 ==="
 pm2 delete n8n 2>/dev/null || true
 
 # Muat isi file .env ke environment sistem agar 100% terbaca oleh PM2 dan n8n
@@ -123,7 +123,7 @@ set +a
 N8N_BIN=$(which n8n)
 pm2 start "$N8N_BIN" --name "n8n" --max-memory-restart 700M --node-args="--max-old-space-size=700" --update-env
 
-# Pasang pembatas ukuran log PM2
+# Pasang pembatas ukuran log PM2 (Maksimal 10MB per file, simpan 2 file)
 pm2 install pm2-logrotate
 pm2 set pm2-logrotate:max_size 10M
 pm2 set pm2-logrotate:retain 2
@@ -133,12 +133,38 @@ pm2 set pm2-logrotate:compress true
 pm2 save
 env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root || true
 
-# Buat perintah "clean-stb" agar nanti bisa dipanggil kapan saja cukup ketik: clean-stb
+echo "=== 9. Mengatur Pembersih Otomatis (Downloads: Maks 5 Jam / 15 File & Clear Cache) ==="
+# A. Buat script pembatas folder downloads (Maksimal 5 jam & Maksimal 15 file)
+cat << 'EOF' > /usr/local/bin/limit-downloads
+#!/bin/bash
+TARGET_DIR="/root/n8n/downloads"
+
+if [ -d "$TARGET_DIR" ]; then
+  # 1. Hapus file di folder downloads yang umurnya lebih dari 5 jam (300 menit)
+  find "$TARGET_DIR" -type f -mmin +300 -delete
+
+  # 2. Jika jumlah file masih lebih dari 15, hapus file yang paling tua hingga tersisa 15 file terbaru
+  ls -1t "$TARGET_DIR" 2>/dev/null | tail -n +16 | while IFS= read -r file; do
+    rm -f "$TARGET_DIR/$file"
+  done
+fi
+
+# 3. Hapus juga file binaryData internal n8n yang umurnya lebih dari 5 jam (300 menit)
+find /root/.n8n/binaryData -type f -mmin +300 -delete 2>/dev/null || true
+EOF
+chmod +x /usr/local/bin/limit-downloads
+
+# Jadwalkan pengecekan folder downloads setiap 15 menit sekali via Cron
+echo "*/15 * * * * root /usr/local/bin/limit-downloads" > /etc/cron.d/n8n-download-limiter
+chmod 644 /etc/cron.d/n8n-download-limiter
+systemctl enable cron 2>/dev/null || true
+systemctl restart cron 2>/dev/null || true
+
+# B. Buat perintah "clean-stb" untuk pembersihan menyeluruh (Harian & Bisa Dipanggil Manual)
 cat << 'EOF' > /usr/local/bin/clean-stb
 #!/bin/bash
-echo "Membersihkan file downloads, cache sistem, log, dan melegakan RAM..."
-rm -rf /root/n8n/downloads/* /home/node/downloads/* 2>/dev/null || true
-find /root/.n8n/binaryData -type f -mtime +0 -delete 2>/dev/null || true
+echo "Menjalankan pembersihan cache sistem, log, downloads, dan melegakan RAM..."
+/usr/local/bin/limit-downloads
 apt-get clean
 apt-get autoclean -y
 apt-get autoremove -y --purge
@@ -147,22 +173,22 @@ rm -rf /root/.npm /root/.cache /root/.node-gyp /tmp/* /var/tmp/*
 journalctl --vacuum-size=20M
 pm2 flush
 sync && echo 3 > /proc/sys/vm/drop_caches
-echo "=== Status Penyimpanan & RAM Saat Ini ==="
+echo "=== Status Penyimpanan eMMC & RAM Saat Ini ==="
 df -h /
 free -h
 EOF
 chmod +x /usr/local/bin/clean-stb
 
-# Pasang juga ke jadwal harian otomatis (Cronjob setiap hari)
+# Pasang clean-stb ke jadwal harian otomatis
 ln -sf /usr/local/bin/clean-stb /etc/cron.daily/n8n-cleaner
 
-echo "=== 9. Membersihkan Seluruh Cache Pasca-Instalasi ==="
-# Hapus kompilator yang sudah tidak terpakai setelah instalasi n8n selesai (hemat ~350MB)
+echo "=== 10. Membersihkan Seluruh Cache Pasca-Instalasi ==="
+# Hapus kompilator C++/Python yang sudah tidak terpakai setelah instalasi selesai (hemat ~350MB)
 apt-get purge -y build-essential python3-pip
 rm -rf /var/lib/apt/lists/*
 
-# Jalankan pembersihan menyeluruh
+# Jalankan pembersihan menyeluruh untuk pertama kali
 /usr/local/bin/clean-stb
 
-echo "=== Instalasi & Optimasi Selesai ==="
+echo "=== Instalasi & Optimasi Selesai Sepenuhnya ==="
 pm2 status
