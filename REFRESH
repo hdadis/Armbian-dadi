@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# ==============================================================================
+# Script Pembersihan Menyeluruh & Auto-Cron (Armbian STB)
+# ==============================================================================
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "[-] Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+# Tentukan lokasi penyimpanan permanen skrip ini
+SCRIPT_PATH="/root/cleanup.sh"
+
+# 1. Fitur Otomatisasi Cron (Menambahkan diri ke crontab jika belum ada)
+if ! crontab -l 2>/dev/null | grep -q "$SCRIPT_PATH"; then
+  echo "[+] Mendaftarkan tugas otomatis ke Cron (Setiap jam 3 Pagi)..."
+  (crontab -l 2>/dev/null; echo "0 3 * * * /bin/bash $SCRIPT_PATH >/dev/null 2>&1") | crontab -
+  echo "[+] Berhasil! Jadwal otomatis harian jam 03.00 telah diaktifkan."
+fi
+
+echo "[+] Memulai pembersihan menyeluruh sistem Armbian..."
+echo "--------------------------------------------------"
+
+# 2. Membersihkan cache package APT, file .deb sisa, dan orphan packages
+echo "[+] Membersihkan cache APT dan paket sisa..."
+apt-get clean
+apt-get autoclean
+apt-get autoremove --purge -y
+
+# 3. Membersihkan cache NPM (sisa instalasi Node.js / Shinobi)
+if command -v npm &> /dev/null; then
+  echo "[+] Membersihkan cache NPM..."
+  npm cache clean --force
+fi
+
+# 4. Memangkas log system (Systemd Journal) - menyisakan 2 hari terakhir
+echo "[+] Memangkas log systemd-journal..."
+journalctl --vacuum-time=2d
+
+# 5. Membersihkan file temporary di /tmp dan /var/tmp
+echo "[+] Membersihkan file temporary (/tmp dan /var/tmp)..."
+rm -rf /tmp/* /var/tmp/*
+
+# 6. Membersihkan Query Log AdGuard Home (jika layanannya aktif)
+if systemctl is-active --quiet AdGuardHome; then
+  echo "[+] Membersihkan query log AdGuard Home sementara..."
+  systemctl stop AdGuardHome
+  
+  if [ -f /opt/AdGuardHome/data/querylog.json ]; then
+    echo '{"data":[]}' > /opt/AdGuardHome/data/querylog.json
+  fi
+  
+  systemctl start AdGuardHome
+fi
+
+# 7. Membersihkan PM2 log (jika PM2 aktif untuk Shinobi / Bot Telegram)
+if command -v pm2 &> /dev/null; then
+  echo "[+] Membersihkan log PM2..."
+  pm2 flush > /dev/null 2>&1
+fi
+
+# 8. Membersihkan cache user lokal (root dan armbian)
+echo "[+] Membersihkan cache user lokal..."
+rm -rf ~/.cache/* 2>/dev/null
+rm -rf /home/armbian/.cache/* 2>/dev/null
+
+# 9. Menyegarkan RAM Cache
+echo "[+] Menyegarkan cache RAM sistem..."
+sync && echo 3 > /proc/sys/vm/drop_caches
+
+echo "--------------------------------------------------"
+echo "[+] PEMBERSIHAN SELESAI & TERJADWAL OTOMATIS!"
+echo "[+] STB Anda kini kembali ringan & akan dibersihkan tiap jam 3 pagi."
+echo "--------------------------------------------------"
