@@ -9,7 +9,7 @@ REAL_USER=${SUDO_USER:-$USER}
 USER_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 
 echo "1. Menginstal MOC, plugin codec, dan ALSA murni..."
-apt-get update
+# apt-get update
 apt-get install -y moc moc-ffmpeg-plugin alsa-utils
 
 echo "2. Menambahkan user ($REAL_USER) ke grup audio..."
