@@ -3,10 +3,9 @@ sudo tee /root/cleanup.sh >/dev/null << 'EOF'
 
 # ==============================================================================
 # Script Pembersihan Menyeluruh & Auto-Cron (Armbian STB HG680P)
-# Terintegrasi: n8n (5 Jam & Kuota 15 File), PostgreSQL, MOCP Safe, AdGuard Home
+# Terintegrasi: n8n (5 Jam & Kuota 15 File), Purge Compiler, MOCP Safe, AdGuard
 # ==============================================================================
 
-# Pastikan script dijalankan sebagai root (administrator)
 if [ "$EUID" -ne 0 ]; then
   echo "[-] Harap jalankan script ini sebagai root (gunakan: sudo bash $0)"
   exit 1
@@ -16,7 +15,6 @@ SCRIPT_PATH="/root/cleanup.sh"
 MAX_FILES=15
 MODE="${1:-full}"
 
-# Daftar folder unduhan/binary n8n & user yang dipantau
 CLEAN_DIRS=(
   "/home/dadi/.n8n/binaryData"
   "/home/dadi/Downloads"
@@ -25,7 +23,6 @@ CLEAN_DIRS=(
   "/root/Downloads"
 )
 
-# Fungsi khusus hapus file unduhan/binary n8n
 clean_n8n_files() {
   for d in "${CLEAN_DIRS[@]}"; do
     if [ -d "$d" ]; then
@@ -57,7 +54,6 @@ fi
 # MODE PENUH (Saat dijalankan manual atau otomatis setiap 5 jam)
 # ------------------------------------------------------------------------------
 
-# Pastikan file script otomatis tersalin ke /root/cleanup.sh jika dijalankan dari lokasi lain
 CURRENT_SCRIPT="$(readlink -f "$0")"
 if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
   cp -f "$CURRENT_SCRIPT" "$SCRIPT_PATH"
@@ -65,10 +61,9 @@ if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
   echo "[+] Menyalin script secara permanen ke $SCRIPT_PATH..."
 fi
 
-# Hapus cron terpisah bawaan installer n8n (jika ada) agar tidak bentrok dengan script ini
 rm -f /etc/cron.d/n8n-cleaner /usr/local/bin/n8n-cleaner.sh 2>/dev/null || true
 
-# 1. Fitur Otomatisasi Cron (Menjalankan setiap 5 jam & cek kuota 15 file tiap 10 menit)
+# 1. Fitur Otomatisasi Cron (Setiap 5 jam & cek kuota 15 file tiap 10 menit)
 echo "[+] Memperbarui jadwal otomatis di Cron (Setiap 5 Jam & Kuota $MAX_FILES File)..."
 (
   crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" || true
@@ -101,7 +96,15 @@ fi
 echo "[+] Menghapus semua file unduhan & binary tersimpan n8n..."
 clean_n8n_files
 
-# 4. Membersihkan cache package APT, file .deb sisa, dan orphan packages
+# 4. Hapus paket kompilator (build-essential ~200MB) HANYA jika n8n sudah terinstal
+if command -v n8n >/dev/null 2>&1; then
+  if dpkg -l | grep -q "^ii  build-essential"; then
+    echo "[+] n8n sudah terinstal! Menghapus build-essential (gcc/g++) untuk hemat ~200MB..."
+    apt-get remove --purge -y build-essential g++ gcc dpkg-dev >/dev/null 2>&1 || true
+  fi
+fi
+
+# 5. Membersihkan cache package APT, file .deb sisa, dan orphan packages
 echo "[+] Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
 apt-get autoremove --purge -y >/dev/null 2>&1 || true
 dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 || true
@@ -109,23 +112,23 @@ apt-get autoclean -y >/dev/null 2>&1 || true
 apt-get clean -y >/dev/null 2>&1 || true
 rm -rf /var/lib/apt/lists/*
 
-# 5. Membersihkan cache NPM secara langsung (aman walau disk 100% penuh)
+# 6. Membersihkan cache NPM secara langsung (aman walau disk 100% penuh)
 echo "[+] Membersihkan cache NPM (root & semua user)..."
 rm -rf /root/.npm /home/*/.npm /root/.node-gyp /home/*/.node-gyp 2>/dev/null || true
 
-# 6. Memangkas log system (Systemd Journal & PostgreSQL log lama)
+# 7. Memangkas log system (Systemd Journal & PostgreSQL log lama)
 echo "[+] Memangkas log systemd-journal & log sistem..."
 journalctl --vacuum-time=1d --vacuum-size=5M 2>/dev/null || true
 find /var/log -type f \( -name "*.gz" -o -name "*.1" -o -name "*.old" \) -delete 2>/dev/null || true
 truncate -s 0 /var/log/postgresql/*.log 2>/dev/null || true
 truncate -s 0 /var/log/nginx/*.log 2>/dev/null || true
 
-# 7. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP yang sedang jalan)
+# 8. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP)
 echo "[+] Membersihkan file temporary (/tmp dan /var/tmp) tanpa memutus MOCP..."
 find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
 find /var/tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
 
-# 8. Membersihkan Query Log AdGuard Home (jika layanannya aktif)
+# 9. Membersihkan Query Log AdGuard Home (jika layanannya aktif)
 if systemctl is-active --quiet AdGuardHome; then
   echo "[+] Membersihkan query log AdGuard Home..."
   systemctl stop AdGuardHome
@@ -136,7 +139,7 @@ if systemctl is-active --quiet AdGuardHome; then
   systemctl start AdGuardHome
 fi
 
-# 9. Membersihkan PM2 log (untuk root dan untuk user biasa seperti dadi)
+# 10. Membersihkan PM2 log (untuk root dan untuk user biasa seperti dadi)
 if command -v pm2 &> /dev/null; then
   echo "[+] Membersihkan log PM2 (root & user n8n)..."
   pm2 flush > /dev/null 2>&1 || true
@@ -149,12 +152,12 @@ if command -v pm2 &> /dev/null; then
   done
 fi
 
-# 10. Membersihkan cache user lokal (root dan semua user di /home)
+# 11. Membersihkan cache user lokal (root dan semua user di /home)
 echo "[+] Membersihkan cache user lokal..."
 rm -rf /root/.cache/* 2>/dev/null || true
 rm -rf /home/*/.cache/* 2>/dev/null || true
 
-# 11. Menyegarkan RAM Cache
+# 12. Menyegarkan RAM Cache
 echo "[+] Menyegarkan cache RAM sistem..."
 sync && echo 3 > /proc/sys/vm/drop_caches
 
@@ -171,4 +174,3 @@ echo "--------------------------------------------------"
 EOF
 
 sudo chmod +x /root/cleanup.sh
-sudo /root/cleanup.sh
