@@ -1,17 +1,61 @@
+sudo tee /root/cleanup.sh >/dev/null << 'EOF'
 #!/bin/bash
 
 # ==============================================================================
 # Script Pembersihan Menyeluruh & Auto-Cron (Armbian STB HG680P)
+# Terintegrasi: n8n (5 Jam & Kuota 15 File), PostgreSQL, MOCP Safe, AdGuard Home
 # ==============================================================================
 
 # Pastikan script dijalankan sebagai root (administrator)
 if [ "$EUID" -ne 0 ]; then
-  echo "[-] Harap jalankan script ini sebagai root (gunakan sudo)"
+  echo "[-] Harap jalankan script ini sebagai root (gunakan: sudo bash $0)"
   exit 1
 fi
 
-# Tentukan lokasi penyimpanan permanen skrip ini
 SCRIPT_PATH="/root/cleanup.sh"
+MAX_FILES=15
+MODE="${1:-full}"
+
+# Daftar folder unduhan/binary n8n & user yang dipantau
+CLEAN_DIRS=(
+  "/home/dadi/.n8n/binaryData"
+  "/home/dadi/Downloads"
+  "/var/www/n8n/downloads"
+  "/root/.n8n/binaryData"
+  "/root/Downloads"
+)
+
+# Fungsi khusus hapus file unduhan/binary n8n
+clean_n8n_files() {
+  for d in "${CLEAN_DIRS[@]}"; do
+    if [ -d "$d" ]; then
+      find "$d" -mindepth 1 -delete 2>/dev/null || true
+    fi
+  done
+}
+
+# ------------------------------------------------------------------------------
+# MODE CEPAT (Dipanggil tiap 10 menit oleh Cron): Cek kuota maksimal 15 file
+# ------------------------------------------------------------------------------
+if [ "$MODE" = "--quota-only" ]; then
+  TOTAL_FILES=0
+  for d in "${CLEAN_DIRS[@]}"; do
+    if [ -d "$d" ]; then
+      COUNT=$(find "$d" -type f 2>/dev/null | wc -l)
+      TOTAL_FILES=$((TOTAL_FILES + COUNT))
+    fi
+  done
+
+  if [ "$TOTAL_FILES" -gt "$MAX_FILES" ]; then
+    clean_n8n_files
+    find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -mmin +10 -exec rm -rf {} + 2>/dev/null || true
+  fi
+  exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# MODE PENUH (Saat dijalankan manual atau otomatis setiap 5 jam)
+# ------------------------------------------------------------------------------
 
 # Pastikan file script otomatis tersalin ke /root/cleanup.sh jika dijalankan dari lokasi lain
 CURRENT_SCRIPT="$(readlink -f "$0")"
@@ -21,12 +65,17 @@ if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
   echo "[+] Menyalin script secara permanen ke $SCRIPT_PATH..."
 fi
 
-# 1. Fitur Otomatisasi Cron (Menambahkan diri ke crontab jika belum ada)
-if ! crontab -l 2>/dev/null | grep -q "$SCRIPT_PATH"; then
-  echo "[+] Mendaftarkan tugas otomatis ke Cron (Setiap jam 3 Pagi)..."
-  (crontab -l 2>/dev/null; echo "0 3 * * * /bin/bash $SCRIPT_PATH >/dev/null 2>&1") | crontab -
-  echo "[+] Berhasil! Jadwal otomatis harian jam 03.00 telah diaktifkan."
-fi
+# Hapus cron terpisah bawaan installer n8n (jika ada) agar tidak bentrok dengan script ini
+rm -f /etc/cron.d/n8n-cleaner /usr/local/bin/n8n-cleaner.sh 2>/dev/null || true
+
+# 1. Fitur Otomatisasi Cron (Menjalankan setiap 5 jam & cek kuota 15 file tiap 10 menit)
+echo "[+] Memperbarui jadwal otomatis di Cron (Setiap 5 Jam & Kuota $MAX_FILES File)..."
+(
+  crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" || true
+  echo "0 */5 * * * /bin/bash $SCRIPT_PATH >/dev/null 2>&1"
+  echo "*/10 * * * * /bin/bash $SCRIPT_PATH --quota-only >/dev/null 2>&1"
+) | crontab -
+echo "[+] Berhasil! Pembersihan otomatis tiap 5 jam & penjaga kuota $MAX_FILES file aktif."
 
 echo "[+] Memulai pembersihan menyeluruh sistem Armbian..."
 echo "--------------------------------------------------"
@@ -34,55 +83,78 @@ echo "Kapasitas SEBELUM pembersihan:"
 df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
 echo "--------------------------------------------------"
 
-# 2. Membersihkan cache package APT, file .deb sisa, dan orphan packages
-echo "[+] Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
-apt-get autoremove --purge -y
-dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge
-apt-get autoclean -y
-apt-get clean -y
-rm -rf /var/lib/apt/lists/*
-
-# 3. Membersihkan cache NPM (sisa instalasi Node.js / Shinobi)
-if command -v npm &> /dev/null; then
-  echo "[+] Membersihkan cache NPM..."
-  npm cache clean --force 2>/dev/null || true
+# 2. Pastikan Swap kembali ke ukuran ideal 1GB (1024MB) jika masih 1.5GB sisa instalasi
+if [ -f /swapfile ]; then
+  SWAP_MB=$(du -m /swapfile | cut -f1)
+  if [ "$SWAP_MB" -gt 1100 ]; then
+    echo "[+] Mengecilkan /swapfile dari ${SWAP_MB}MB kembali ke default 1024MB (1GB)..."
+    swapoff /swapfile 2>/dev/null || true
+    rm -f /swapfile
+    dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null 2>&1
+    swapon /swapfile
+  fi
 fi
 
-# 4. Memangkas log system (Systemd Journal) - menyisakan 2 hari terakhir / maks 10MB
-echo "[+] Memangkas log systemd-journal..."
-journalctl --vacuum-time=2d --vacuum-size=10M 2>/dev/null || true
+# 3. Membersihkan semua file unduhan / binary tersimpan n8n
+echo "[+] Menghapus semua file unduhan & binary tersimpan n8n..."
+clean_n8n_files
 
-# 5. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP yang sedang jalan)
+# 4. Membersihkan cache package APT, file .deb sisa, dan orphan packages
+echo "[+] Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
+apt-get autoremove --purge -y >/dev/null 2>&1 || true
+dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 || true
+apt-get autoclean -y >/dev/null 2>&1 || true
+apt-get clean -y >/dev/null 2>&1 || true
+rm -rf /var/lib/apt/lists/*
+
+# 5. Membersihkan cache NPM secara langsung (aman walau disk 100% penuh)
+echo "[+] Membersihkan cache NPM (root & semua user)..."
+rm -rf /root/.npm /home/*/.npm /root/.node-gyp /home/*/.node-gyp 2>/dev/null || true
+
+# 6. Memangkas log system (Systemd Journal & PostgreSQL log lama)
+echo "[+] Memangkas log systemd-journal & log sistem..."
+journalctl --vacuum-time=1d --vacuum-size=5M 2>/dev/null || true
+find /var/log -type f \( -name "*.gz" -o -name "*.1" -o -name "*.old" \) -delete 2>/dev/null || true
+truncate -s 0 /var/log/postgresql/*.log 2>/dev/null || true
+truncate -s 0 /var/log/nginx/*.log 2>/dev/null || true
+
+# 7. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP yang sedang jalan)
 echo "[+] Membersihkan file temporary (/tmp dan /var/tmp) tanpa memutus MOCP..."
 find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
 find /var/tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
 
-# 6. Membersihkan Query Log AdGuard Home (jika layanannya aktif)
+# 8. Membersihkan Query Log AdGuard Home (jika layanannya aktif)
 if systemctl is-active --quiet AdGuardHome; then
   echo "[+] Membersihkan query log AdGuard Home..."
   systemctl stop AdGuardHome
-  
-  # Bersihkan format querylog lama (.json) maupun baru (.json.1)
   if [ -f /opt/AdGuardHome/data/querylog.json ]; then
     echo '{"data":[]}' > /opt/AdGuardHome/data/querylog.json
   fi
   rm -f /opt/AdGuardHome/data/querylog.json.1 2>/dev/null || true
-  
   systemctl start AdGuardHome
 fi
 
-# 7. Membersihkan PM2 log (jika PM2 aktif untuk Shinobi / Bot Telegram)
+# 9. Membersihkan PM2 log (untuk root dan untuk user biasa seperti dadi)
 if command -v pm2 &> /dev/null; then
-  echo "[+] Membersihkan log PM2..."
+  echo "[+] Membersihkan log PM2 (root & user n8n)..."
   pm2 flush > /dev/null 2>&1 || true
+  for u in /home/*; do
+    USERNAME=$(basename "$u")
+    if [ -d "$u/.pm2" ]; then
+      su - "$USERNAME" -c "pm2 flush >/dev/null 2>&1" || true
+      rm -rf "$u/.pm2/logs/*" 2>/dev/null || true
+    fi
+  done
 fi
 
-# 8. Membersihkan cache user lokal (root dan semua user di /home)
+# 10. Membersihkan cache user lokal (root dan semua user di /home)
 echo "[+] Membersihkan cache user lokal..."
 rm -rf /root/.cache/* 2>/dev/null || true
 rm -rf /home/*/.cache/* 2>/dev/null || true
 
-# 9. Menyegarkan RAM Cache
+# 11. Menyegarkan RAM Cache
 echo "[+] Menyegarkan cache RAM sistem..."
 sync && echo 3 > /proc/sys/vm/drop_caches
 
@@ -90,6 +162,13 @@ echo "--------------------------------------------------"
 echo "Kapasitas SESUDAH pembersihan:"
 df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
 echo "--------------------------------------------------"
-echo "[+] PEMBERSIHAN SELESAI & TERJADWAL OTOMATIS!"
-echo "[+] STB Anda kini kembali ringan & akan dibersihkan tiap jam 3 pagi."
+echo "Status RAM & Swap Saat Ini:"
+free -h
 echo "--------------------------------------------------"
+echo "[+] PEMBERSIHAN SELESAI & TERJADWAL OTOMATIS!"
+echo "[+] STB Anda akan di-refresh otomatis setiap 5 jam & dibatasi maks $MAX_FILES file."
+echo "--------------------------------------------------"
+EOF
+
+sudo chmod +x /root/cleanup.sh
+sudo /root/cleanup.sh
