@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script Pembersihan Menyeluruh & Auto-Cron (Armbian STB)
+# Script Pembersihan Menyeluruh & Auto-Cron (Armbian STB HG680P)
 # ==============================================================================
 
 # Pastikan script dijalankan sebagai root (administrator)
@@ -13,6 +13,14 @@ fi
 # Tentukan lokasi penyimpanan permanen skrip ini
 SCRIPT_PATH="/root/cleanup.sh"
 
+# Pastikan file script otomatis tersalin ke /root/cleanup.sh jika dijalankan dari lokasi lain
+CURRENT_SCRIPT="$(readlink -f "$0")"
+if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
+  cp -f "$CURRENT_SCRIPT" "$SCRIPT_PATH"
+  chmod +x "$SCRIPT_PATH"
+  echo "[+] Menyalin script secara permanen ke $SCRIPT_PATH..."
+fi
+
 # 1. Fitur Otomatisasi Cron (Menambahkan diri ke crontab jika belum ada)
 if ! crontab -l 2>/dev/null | grep -q "$SCRIPT_PATH"; then
   echo "[+] Mendaftarkan tugas otomatis ke Cron (Setiap jam 3 Pagi)..."
@@ -22,35 +30,43 @@ fi
 
 echo "[+] Memulai pembersihan menyeluruh sistem Armbian..."
 echo "--------------------------------------------------"
+echo "Kapasitas SEBELUM pembersihan:"
+df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
+echo "--------------------------------------------------"
 
 # 2. Membersihkan cache package APT, file .deb sisa, dan orphan packages
-echo "[+] Membersihkan cache APT dan paket sisa..."
-apt-get clean
-apt-get autoclean
+echo "[+] Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
 apt-get autoremove --purge -y
+dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge
+apt-get autoclean -y
+apt-get clean -y
+rm -rf /var/lib/apt/lists/*
 
 # 3. Membersihkan cache NPM (sisa instalasi Node.js / Shinobi)
 if command -v npm &> /dev/null; then
   echo "[+] Membersihkan cache NPM..."
-  npm cache clean --force
+  npm cache clean --force 2>/dev/null || true
 fi
 
-# 4. Memangkas log system (Systemd Journal) - menyisakan 2 hari terakhir
+# 4. Memangkas log system (Systemd Journal) - menyisakan 2 hari terakhir / maks 10MB
 echo "[+] Memangkas log systemd-journal..."
-journalctl --vacuum-time=2d
+journalctl --vacuum-time=2d --vacuum-size=10M 2>/dev/null || true
 
-# 5. Membersihkan file temporary di /tmp dan /var/tmp
-echo "[+] Membersihkan file temporary (/tmp dan /var/tmp)..."
-rm -rf /tmp/* /var/tmp/*
+# 5. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP yang sedang jalan)
+echo "[+] Membersihkan file temporary (/tmp dan /var/tmp) tanpa memutus MOCP..."
+find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
+find /var/tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
 
 # 6. Membersihkan Query Log AdGuard Home (jika layanannya aktif)
 if systemctl is-active --quiet AdGuardHome; then
-  echo "[+] Membersihkan query log AdGuard Home sementara..."
+  echo "[+] Membersihkan query log AdGuard Home..."
   systemctl stop AdGuardHome
   
+  # Bersihkan format querylog lama (.json) maupun baru (.json.1)
   if [ -f /opt/AdGuardHome/data/querylog.json ]; then
     echo '{"data":[]}' > /opt/AdGuardHome/data/querylog.json
   fi
+  rm -f /opt/AdGuardHome/data/querylog.json.1 2>/dev/null || true
   
   systemctl start AdGuardHome
 fi
@@ -58,18 +74,21 @@ fi
 # 7. Membersihkan PM2 log (jika PM2 aktif untuk Shinobi / Bot Telegram)
 if command -v pm2 &> /dev/null; then
   echo "[+] Membersihkan log PM2..."
-  pm2 flush > /dev/null 2>&1
+  pm2 flush > /dev/null 2>&1 || true
 fi
 
-# 8. Membersihkan cache user lokal (root dan armbian)
+# 8. Membersihkan cache user lokal (root dan semua user di /home)
 echo "[+] Membersihkan cache user lokal..."
-rm -rf ~/.cache/* 2>/dev/null
-rm -rf /home/armbian/.cache/* 2>/dev/null
+rm -rf /root/.cache/* 2>/dev/null || true
+rm -rf /home/*/.cache/* 2>/dev/null || true
 
 # 9. Menyegarkan RAM Cache
 echo "[+] Menyegarkan cache RAM sistem..."
 sync && echo 3 > /proc/sys/vm/drop_caches
 
+echo "--------------------------------------------------"
+echo "Kapasitas SESUDAH pembersihan:"
+df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
 echo "--------------------------------------------------"
 echo "[+] PEMBERSIHAN SELESAI & TERJADWAL OTOMATIS!"
 echo "[+] STB Anda kini kembali ringan & akan dibersihkan tiap jam 3 pagi."
