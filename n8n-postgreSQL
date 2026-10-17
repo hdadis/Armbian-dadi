@@ -1,7 +1,8 @@
+cat > ~/install-n8n.sh << 'EOF_SCRIPT'
 #!/bin/bash
 # =====================================================================
-#  n8n + PostgreSQL + PM2 + Cloudflared + Auto-Cleaner - LOW-RAM (HG680P 1GB) v3
-#  Aman dijalankan ulang (idempotent): secret tidak berubah.
+#  n8n + PostgreSQL + PM2 + Cloudflared + Auto-Cleaner (HG680P 1GB)
+#  Versi Final Anti-OOM & Anti-Disk-Full (n8n@1.94.0 + Node 22)
 #  Jalankan sebagai user biasa (BUKAN root):  bash install-n8n.sh
 # =====================================================================
 set -eu
@@ -12,63 +13,96 @@ LOCAL_IP="192.168.18.20"
 DB_NAME="n8n"
 DB_USER="n8n_user"
 PROJECT_DIR="/var/www/n8n"
-N8N_VERSION="1.94.0"          # Bisa di-pin, misal "1.85.4"
+N8N_VERSION="1.94.0"          # Dipin ke 1.94.0 agar stabil & ringan
 NODE_MAJOR="22"               # Node 22 LTS
-SWAP_SIZE="1G"                # dibuat hanya jika belum ada swap
-HEAP_MB="400"                 # V8 heap n8n (aman untuk RAM 1GB)
-RESTART_MB="520"              # PM2 restart jika RSS melewati ini
+INSTALL_SWAP_MB="1536"        # 1.5 GB sementara khusus saat npm install agar tidak Killed
+FINAL_SWAP_MB="1024"          # 1 GB default setelah instalasi selesai (hemat eMMC)
+HEAP_MB="400"                 # V8 heap n8n saat berjalan (aman untuk RAM 1GB)
+RESTART_MB="520"              # PM2 auto-restart jika RSS melewati ini
 MAX_FILES=15                  # Maksimal jumlah file unduhan/binary sebelum dihapus semua
 
-# 0.0.0.0 agar bisa diakses langsung via http://192.168.18.20:5678 sekaligus via Nginx/Cloudflared
+# 0.0.0.0 agar bisa diakses via http://192.168.18.20:5678 dan via domain
 LISTEN_ADDRESS="0.0.0.0"
-SETUP_NGINX="true"            # true = pasang Nginx (HTTP :80) sebagai reverse proxy lokal
-SECURE_COOKIE="false"         # Wajib false agar login via http://192.168.18.20:5678 berfungsi
+SETUP_NGINX="true"
+SECURE_COOKIE="false"         # False agar login via IP lokal HTTP tidak terblokir
 
 # Token Cloudflare Tunnel
 CF_TOKEN="eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9"
 # ---------------------------------------------------------------------
 
 echo "=================================================="
-echo "   n8n + PostgreSQL LOW-RAM Setup (v3 - HG680P)   "
+echo "   n8n $N8N_VERSION + PostgreSQL Setup (HG680P 1GB) "
 echo "=================================================="
 
 if [ "$(id -u)" -eq 0 ]; then
-    echo "ERROR: jangan jalankan sebagai root. Pakai user biasa yang punya sudo."
+    echo "ERROR: Jangan jalankan sebagai root. Gunakan user biasa (misal: dadi)."
     exit 1
 fi
 
 ENV_FILE="$PROJECT_DIR/.env"
 N8N_USER_DIR="$HOME/.n8n"
 
-# [0/9] Swap (penting: npm install n8n di 1GB RAM sering OOM tanpa swap)
-echo "[0/9] Memeriksa swap..."
-if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
-    echo "  Tidak ada swap, membuat /swapfile ($SWAP_SIZE)..."
-    sudo fallocate -l "$SWAP_SIZE" /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024
+# [0/9] Bersihkan sisa sampah lama & siapkan Swap
+echo "[0/9] Membersihkan sisa cache lama & memeriksa Swap..."
+sudo rm -rf /root/.npm "$HOME/.npm" /tmp/* /var/tmp/*
+sudo journalctl --vacuum-time=1s >/dev/null 2>&1 || true
+
+INSTALLED_N8N=$(n8n --version 2>/dev/null || echo "none")
+if [ "$INSTALLED_N8N" != "$N8N_VERSION" ]; then
+    echo "  Menyiapkan Swap sementara ${INSTALL_SWAP_MB}MB (1.5GB) untuk instalasi n8n..."
+    sudo swapoff /swapfile 2>/dev/null || true
+    sudo rm -f /swapfile
+    sudo dd if=/dev/zero of=/swapfile bs=1M count="$INSTALL_SWAP_MB" status=progress
     sudo chmod 600 /swapfile
     sudo mkswap /swapfile
     sudo swapon /swapfile
-    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
-    echo 'vm.swappiness=20' | sudo tee /etc/sysctl.d/99-n8n-swap.conf >/dev/null
-    sudo sysctl -p /etc/sysctl.d/99-n8n-swap.conf >/dev/null || true
 else
-    echo "  Swap sudah ada, dilewati."
+    if [ ! -f /swapfile ]; then
+        sudo dd if=/dev/zero of=/swapfile bs=1M count="$FINAL_SWAP_MB" status=progress
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+    fi
+    sudo swapon /swapfile 2>/dev/null || true
 fi
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+echo 'vm.swappiness=20' | sudo tee /etc/sysctl.d/99-n8n-swap.conf >/dev/null
+sudo sysctl -p /etc/sysctl.d/99-n8n-swap.conf >/dev/null || true
 
 # [1/9] Dependensi sistem
 echo "[1/9] Menginstal dependensi sistem..."
 sudo apt update -y
 sudo apt install -y postgresql postgresql-contrib curl git build-essential \
     ca-certificates gnupg python3 openssl cron
+sudo apt-get clean
 
 # [2/9] Node.js + PM2 + n8n
-echo "[2/9] Menginstal Node.js $NODE_MAJOR, PM2 & n8n@$N8N_VERSION..."
-curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
-sudo apt install -y nodejs
+echo "[2/9] Memeriksa Node.js $NODE_MAJOR, PM2 & n8n@$N8N_VERSION..."
+if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q "^v${NODE_MAJOR}\."; then
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
+    sudo apt install -y nodejs
+    sudo apt-get clean
+fi
 node -v
 npm -v
-# Batasi RAM saat npm install agar STB tidak freeze/hang
-sudo NODE_OPTIONS="--max-old-space-size=512" npm install -g pm2 "n8n@${N8N_VERSION}" --unsafe-perm --no-audit --no-fund
+
+if ! command -v pm2 >/dev/null 2>&1; then
+    echo "  Menginstal PM2..."
+    sudo npm install -g pm2 --no-audit --no-fund
+    sudo rm -rf /root/.npm "$HOME/.npm" /tmp/*
+fi
+
+if [ "$INSTALLED_N8N" != "$N8N_VERSION" ]; then
+    echo "  Menginstal n8n@$N8N_VERSION (proses ini memakan waktu 5-15 menit di ARM, harap sabar)..."
+    sudo rm -rf /usr/lib/node_modules/n8n /usr/lib/node_modules/.n8n*
+    sudo rm -rf /usr/local/lib/node_modules/n8n /usr/local/lib/node_modules/.n8n*
+
+    sudo NODE_OPTIONS="--max-old-space-size=1024" npm install -g "n8n@${N8N_VERSION}" \
+        --unsafe-perm --no-audit --no-fund --maxsockets 1 --loglevel info
+
+    sudo rm -rf /root/.npm "$HOME/.npm" /tmp/*
+else
+    echo "  n8n versi $N8N_VERSION sudah terinstal, melewati unduhan ulang."
+fi
 n8n --version
 
 # [3/9] Secret (dipertahankan jika sudah ada)
@@ -103,7 +137,6 @@ sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
 sudo -u postgres psql -d "$DB_NAME" -c "GRANT ALL ON SCHEMA public TO $DB_USER;"
 
-# Tuning hemat RAM untuk PostgreSQL di 1GB RAM
 sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '24MB';"
 sudo -u postgres psql -c "ALTER SYSTEM SET work_mem = '2MB';"
 sudo -u postgres psql -c "ALTER SYSTEM SET maintenance_work_mem = '16MB';"
@@ -143,7 +176,7 @@ N8N_ENCRYPTION_KEY=$ENCRYPTION_KEY
 GENERIC_TIMEZONE=Asia/Jakarta
 TZ=Asia/Jakarta
 
-# --- Hemat memori & Disk (Penting untuk HG680P) ---
+# --- Hemat memori & Disk (Khusus HG680P) ---
 N8N_DEFAULT_BINARY_DATA_MODE=filesystem
 N8N_PAYLOAD_SIZE_MAX=15
 EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
@@ -210,8 +243,8 @@ fi
 
 echo "[7b/9] Memasang & Mengonfigurasi Cloudflared Service..."
 if ! command -v cloudflared >/dev/null 2>&1; then
-    echo "  Mengunduh binary cloudflared untuk arsitektur $(dpkg --print-architecture)..."
     ARCH=$(dpkg --print-architecture)
+    echo "  Mengunduh binary cloudflared untuk $ARCH..."
     curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" -o /tmp/cloudflared.deb
     sudo dpkg -i /tmp/cloudflared.deb
     rm -f /tmp/cloudflared.deb
@@ -243,19 +276,14 @@ clean_all_files() {
             find "\$d" -mindepth 1 -delete 2>/dev/null || true
         fi
     done
-    # Bersihkan file sementara di /tmp yang berumur lebih dari 10 menit
     find /tmp -mindepth 1 -mmin +10 -not -name "systemd-*" -delete 2>/dev/null || true
-    # Flush log PM2 agar tidak membengkak di eMMC
     su - "$USER" -c "pm2 flush >/dev/null 2>&1" || true
 }
 
 if [ "\$MODE" = "force" ]; then
-    # Dipanggil setiap 5 jam: hapus semua file tanpa terkecuali
     clean_all_files
-    # Drop OS pagecache agar RAM kembali lega
     sync; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true
 else
-    # Mode check (dipanggil tiap 10 menit): hitung total file, jika > 15 hapus semua
     TOTAL_FILES=0
     for d in "\${DIRS[@]}"; do
         if [ -d "\$d" ]; then
@@ -272,7 +300,6 @@ EOF
 
 sudo chmod +x /usr/local/bin/n8n-cleaner.sh
 
-# Pasang jadwal ke /etc/cron.d/n8n-cleaner
 sudo tee /etc/cron.d/n8n-cleaner >/dev/null << EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -286,14 +313,28 @@ EOF
 sudo chmod 644 /etc/cron.d/n8n-cleaner
 sudo systemctl enable --now cron
 
-# [9/9] Pembersihan Cache Sistem & NPM
-echo "[9/9] Membersihkan sampah apt & cache npm..."
+# [9/9] Pembersihan Akhir Sistem & Kembalikan Swap ke Default 1GB
+echo "[9/9] Membersihkan sampah apt, cache npm & mengembalikan Swap ke ${FINAL_SWAP_MB}MB (1GB)..."
 sudo apt-get clean
 sudo apt-get autoclean
 sudo apt-get autoremove -y
 sudo apt autoremove -y
-npm cache clean --force
-sudo npm cache clean --force
+sudo rm -rf /root/.npm "$HOME/.npm" /tmp/*
+
+# Kembalikan ukuran swap ke 1GB (1024MB) jika saat ini masih berukuran 1.5GB
+CURRENT_SWAP_MB=0
+if [ -f /swapfile ]; then
+    CURRENT_SWAP_MB=$(du -m /swapfile | cut -f1)
+fi
+if [ "$CURRENT_SWAP_MB" -gt 1100 ]; then
+    echo "  Mengecilkan /swapfile kembali ke default ${FINAL_SWAP_MB}MB (1GB)..."
+    sudo swapoff /swapfile 2>/dev/null || true
+    sudo rm -f /swapfile
+    sudo dd if=/dev/zero of=/swapfile bs=1M count="$FINAL_SWAP_MB" status=progress
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+fi
 
 # Tunggu n8n siap (start pertama di ARM + migrasi DB bisa 1-3 menit)
 echo "Menunggu n8n siap (maks 3 menit)..."
@@ -309,7 +350,7 @@ if [ "$READY" = "yes" ]; then
     echo " - Akses Lokal  : http://$LOCAL_IP:5678"
     echo " - Akses Publik : https://$DOMAIN/"
 else
-    echo " n8n belum merespons. Cek log:  pm2 logs n8n --lines 50"
+    echo " n8n sedang melakukan migrasi database awal. Cek dengan: pm2 logs n8n"
 fi
 echo "--------------------------------------------------"
 echo " Status Storage & Memori Saat Ini:"
@@ -319,3 +360,6 @@ free -h
 echo "--------------------------------------------------"
 pm2 status
 echo "=================================================="
+EOF_SCRIPT
+chmod +x ~/install-n8n.sh
+bash ~/install-n8n.sh
