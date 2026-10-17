@@ -1,0 +1,206 @@
+#!/bin/bash
+
+# ==========================================================================
+# SKRIP INSTALASI NGINX-LIGHT & AUTO-REFRESH UNTUK STB HG680P (ARMBIAN)
+# ==========================================================================
+
+set -e
+
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Error: Harap jalankan skrip ini dengan sudo! (sudo ./install_nginx.sh)"
+  exit 1
+fi
+
+# Deteksi user asli yang menjalankan sudo
+TARGET_USER="${SUDO_USER:-armbian}"
+if ! id "$TARGET_USER" &>/dev/null; then
+  TARGET_USER="root"
+fi
+
+if [ "$TARGET_USER" = "root" ]; then
+  USER_HOME="/root"
+else
+  USER_HOME="/home/$TARGET_USER"
+fi
+
+FOLDER_WEB="$USER_HOME/website"
+SCRIPT_REFRESH="$USER_HOME/refresh.sh"
+
+echo "=================================================="
+echo "🚀 Memulai Instalasi Nginx-Light (Super Hemat Storage)"
+echo "👤 Target User : $TARGET_USER"
+echo "📂 Lokasi Web  : $FOLDER_WEB"
+echo "=================================================="
+
+# 1. Update & Instal Nginx-Light Tanpa Paket Tambahan + Bersihkan Cache
+echo "⏳ Menginstal nginx-light (minimalis)..."
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y -qq
+apt-get install -y -qq nginx-light --no-install-recommends
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+
+# 2. Membuat Folder Website & File Index
+echo "⏳ Menyiapkan direktori website..."
+mkdir -p "$FOLDER_WEB"
+
+if [ ! -f "$FOLDER_WEB/index.html" ]; then
+cat << 'EOF' > "$FOLDER_WEB/index.html"
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STB HG680P - Nginx Light</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; text-align: center; margin-top: 10%; background-color: #f0f2f5; color: #1c1e21; padding: 0 20px; }
+        .card { background: white; padding: 35px; max-width: 500px; margin: 0 auto; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        h1 { color: #10b981; margin-top: 0; }
+        code { background: #e5e7eb; padding: 4px 8px; border-radius: 4px; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>⚡ Nginx-Light Aktif!</h1>
+        <p>Server web ultra-ringan pada STB HG680P siap digunakan.</p>
+        <p><small>Direktori: <code>~/website</code></small></p>
+    </div>
+</body>
+</html>
+EOF
+fi
+
+# 3. Pengaturan Hak Akses (Setgid)
+echo "⏳ Mengatur izin akses folder..."
+chown -R "$TARGET_USER":www-data "$FOLDER_WEB"
+chmod -R 2755 "$FOLDER_WEB"
+chmod o+x "$USER_HOME"
+
+# 4. Injeksi Optimasi Hardware STB
+echo "⏳ Menerapkan tuning performa..."
+cat << 'EOF' > /etc/nginx/conf.d/stb-optimizations.conf
+server_tokens off;
+tcp_nopush on;
+tcp_nodelay on;
+types_hash_max_size 2048;
+
+open_file_cache max=1000 inactive=20s;
+open_file_cache_valid 30s;
+open_file_cache_min_uses 2;
+open_file_cache_errors on;
+
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 4;
+gzip_min_length 256;
+gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;
+EOF
+
+# 5. Konfigurasi Server Block Utama
+echo "⏳ Mengonfigurasi Virtual Host..."
+CONFIG_PATH="/etc/nginx/sites-available/default"
+[ ! -f "${CONFIG_PATH}.bak" ] && cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
+
+cat << EOF > "$CONFIG_PATH"
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    root $FOLDER_WEB;
+    index index.html index.htm;
+
+    server_name _;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js|webp|svg|woff2)$ {
+        expires 7d;
+        add_header Cache-Control "public, no-transform";
+    }
+
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    access_log off;
+    error_log /var/log/nginx/error.log error;
+}
+EOF
+
+# 6. Optimasi Logrotate
+echo "⏳ Mengoptimalkan Logrotate..."
+LOGROTATE_PATH="/etc/logrotate.d/nginx"
+if [ -f "$LOGROTATE_PATH" ]; then
+cat << 'EOF' > "$LOGROTATE_PATH"
+/var/log/nginx/*.log {
+        daily
+        size 1M
+        missingok
+        rotate 2
+        compress
+        delaycompress
+        notifempty
+        create 0640 www-data adm
+        sharedscripts
+        postrotate
+                if [ -f /run/nginx.pid ]; then
+                        kill -USR1 $(cat /run/nginx.pid)
+                fi
+        endscript
+}
+EOF
+fi
+
+# 7. Membuat Skrip Refresh Otomatis (refresh.sh & perintah global 'refresh-web')
+echo "⏳ Membuat skrip refresh di $SCRIPT_REFRESH..."
+cat << EOF > "$SCRIPT_REFRESH"
+#!/bin/bash
+# ==========================================================================
+# SKRIP REFRESH WEBSITE & NGINX STB HG680P
+# ==========================================================================
+
+echo "🔄 Memperbarui izin akses file di $FOLDER_WEB..."
+sudo chown -R $TARGET_USER:www-data "$FOLDER_WEB"
+sudo find "$FOLDER_WEB" -type d -exec chmod 2755 {} +
+sudo find "$FOLDER_WEB" -type f -exec chmod 644 {} +
+
+echo "🔍 Memeriksa konfigurasi Nginx..."
+if sudo nginx -t; then
+    echo "⚡ Memuat ulang (Reload) layanan Nginx..."
+    sudo systemctl reload nginx
+    echo "✅ BERHASIL! Website dan konfigurasi telah diperbarui."
+else
+    echo "❌ GAGAL! Ada kesalahan pada konfigurasi Nginx, reload dibatalkan."
+    exit 1
+fi
+EOF
+
+# Memberikan izin eksekusi pada skrip refresh & membuat shortcut global
+chown "$TARGET_USER":"$TARGET_USER" "$SCRIPT_REFRESH"
+chmod +x "$SCRIPT_REFRESH"
+ln -sf "$SCRIPT_REFRESH" /usr/local/bin/refresh-web
+
+# 8. Validasi Akhir & Aktivasi Layanan
+echo "⏳ Memeriksa keabsahan konfigurasi Nginx..."
+if nginx -t; then
+    systemctl restart nginx
+    systemctl enable nginx
+    
+    IP_STB=$(hostname -I | awk '{print $1}')
+    
+    echo "=================================================="
+    echo "🎉 SELESAI! Nginx-Light & Skrip Refresh Siap."
+    echo "=================================================="
+    echo "📂 Folder Website  : $FOLDER_WEB"
+    echo "🌐 Akses Browser   : http://$IP_STB"
+    echo "🔄 Cara Refresh    : Ketik './refresh.sh' atau cukup 'refresh-web'"
+    echo "=================================================="
+else
+    echo "❌ Terjadi kesalahan pada konfigurasi Nginx. Mengembalikan backup..."
+    [ -f "${CONFIG_PATH}.bak" ] && cp "${CONFIG_PATH}.bak" "$CONFIG_PATH"
+    exit 1
+fi
