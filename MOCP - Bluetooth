@@ -1,0 +1,42 @@
+#!/bin/bash
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini dengan sudo: sudo ./nama_script.sh"
+  exit 1
+fi
+
+REAL_USER=${SUDO_USER:-$USER}
+USER_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+USER_ID=$(id -u "$REAL_USER")
+
+echo "1. Menginstal MOC, ALSA, dan PipeWire (Khusus dukungan Bluetooth/Multi-App)..."
+apt-get update
+# Hapus pulseaudio murni agar tidak bentrok dengan pipewire-pulse
+apt-get remove -y pulseaudio pulseaudio-module-bluetooth 2>/dev/null || true
+
+# Instal hanya paket esensial + pipewire-alsa sebagai jembatan mocp
+apt-get install -y moc moc-ffmpeg-plugin alsa-utils \
+  pipewire pipewire-pulse pipewire-alsa wireplumber \
+  libspa-0.2-bluetooth pulseaudio-utils
+
+echo "2. Menambahkan user ($REAL_USER) ke grup audio..."
+usermod -aG audio "$REAL_USER"
+
+echo "3. Mengaktifkan layanan PipeWire pada sesi user ($REAL_USER)..."
+sudo -u "$REAL_USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" systemctl --user --now enable pipewire.socket pipewire-pulse.socket wireplumber.service
+sudo -u "$REAL_USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" systemctl --user restart pipewire pipewire-pulse wireplumber
+
+echo "4. Mengatur konfigurasi MOC..."
+MOC_DIR="$USER_HOME/.moc"
+mkdir -p "$MOC_DIR"
+echo "SoundDriver = ALSA" > "$MOC_DIR/config"
+chown -R "$REAL_USER":"$REAL_USER" "$MOC_DIR"
+chmod 600 "$MOC_DIR/config"
+
+echo "5. Memulai ulang MOC..."
+su - "$REAL_USER" -c "mocp -x 2>/dev/null || true"
+su - "$REAL_USER" -c "mocp -S"
+
+echo "========================================================"
+echo "Instalasi Selesai!"
+sudo -u "$REAL_USER" XDG_RUNTIME_DIR="/run/user/$USER_ID" pactl info | grep "Server Name"
