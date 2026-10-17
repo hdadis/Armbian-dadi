@@ -141,29 +141,36 @@ def scan_network():
 
 def monitor_new_devices():
     global known_macs
-    initial_devices = scan_network()
-    known_macs = {dev["mac"].lower() for dev in initial_devices}
+    time.sleep(5)  # Jeda sejenak agar jaringan stabil saat startup
+    try:
+        initial_devices = scan_network()
+        known_macs = {dev["mac"].lower() for dev in initial_devices}
+    except Exception as e:
+        print(f"Peringatan inisialisasi device monitor: {e}")
+        known_macs = set()
     
     while True:
         time.sleep(60)
-        current_devices = scan_network()
-        
-        for dev in current_devices:
-            mac_lower = dev["mac"].lower()
-            if mac_lower not in known_macs:
-                known_macs.add(mac_lower)
-                
-                if MY_CHAT_ID:
-                    notif_msg = (
-                        "🚨 *Perangkat Baru Terkoneksi!*\n\n"
-                        f"Nama : `{dev['name']}`\n"
-                        f"IP   : `{dev['ip']}`\n"
-                        f"MAC  : `{dev['mac']}`"
-                    )
-                    try:
-                        bot.send_message(MY_CHAT_ID, notif_msg, parse_mode="Markdown")
-                    except Exception as e:
-                        print(f"Gagal mengirim notifikasi: {e}")
+        try:
+            current_devices = scan_network()
+            for dev in current_devices:
+                mac_lower = dev["mac"].lower()
+                if mac_lower not in known_macs:
+                    known_macs.add(mac_lower)
+                    
+                    if MY_CHAT_ID:
+                        notif_msg = (
+                            "🚨 *Perangkat Baru Terkoneksi!*\n\n"
+                            f"Nama : `{dev['name']}`\n"
+                            f"IP   : `{dev['ip']}`\n"
+                            f"MAC  : `{dev['mac']}`"
+                        )
+                        try:
+                            bot.send_message(MY_CHAT_ID, notif_msg, parse_mode="Markdown")
+                        except Exception as e:
+                            print(f"Gagal mengirim notifikasi: {e}")
+        except Exception as e:
+            print(f"Error pada background monitoring: {e}")
 
 monitor_thread = threading.Thread(target=monitor_new_devices, daemon=True)
 monitor_thread.start()
@@ -173,27 +180,31 @@ def get_ip_details():
         url = "http://ip-api.com/json/"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            return f"API HTTP Error: Status Code {response.status_code}"
+            
         data = response.json()
         
         if data.get("status") == "success":
             return (
                 "==== IP Detail Information ====\n"
-                f"Country Name : {data.get('country', '')}\n"
-                f"Country Code : {data.get('countryCode', '')}\n"
-                f"Region       : {data.get('region', '')}\n"
-                f"Region Name  : {data.get('regionName', '')}\n"
-                f"City         : {data.get('city', '')}\n"
-                f"Timezone     : {data.get('timezone', '')}\n"
-                f"ISP          : {data.get('isp', '')}\n"
-                f"AS           : {data.get('as', '')}\n"
-                f"IP Address   : {data.get('query', '')}"
+                f"Country Name : {str(data.get('country', ''))}\n"
+                f"Country Code : {str(data.get('countryCode', ''))}\n"
+                f"Region       : {str(data.get('region', ''))}\n"
+                f"Region Name  : {str(data.get('regionName', ''))}\n"
+                f"City         : {str(data.get('city', ''))}\n"
+                f"Timezone     : {str(data.get('timezone', ''))}\n"
+                f"ISP          : {str(data.get('isp', ''))}\n"
+                f"AS           : {str(data.get('as', ''))}\n"
+                f"IP Address   : {str(data.get('query', ''))}"
             )
         else:
             msg = data.get("message", "Gagal mendapatkan data IP")
             return f"API Error: {msg}"
             
     except requests.exceptions.RequestException as e:
-        return f"Terjadi kesalahan jaringan: {e}"
+        return f"Terjadi kesalahan jaringan (kemungkinan internet/DNS belum siap): {e}"
     except Exception as e:
         return f"Gagal memproses response: {e}"
 
