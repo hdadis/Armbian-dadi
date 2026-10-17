@@ -9,67 +9,75 @@ fi
 # Hentikan script jika terjadi error pada perintah penting
 set -e
 
-# Lokasi swap sementara
-SWAP_FILE="/swapfile_temp"
-
-# Fungsi otomatis untuk menghapus swap sementara & mengembalikan ke default Armbian (zram)
-cleanup_swap() {
-  if [ -f "$SWAP_FILE" ]; then
-    echo "=== Mengembalikan konfigurasi Swap ke default (Menghapus Swap Sementara) ==="
-    swapoff "$SWAP_FILE" 2>/dev/null || true
-    rm -f "$SWAP_FILE"
-    echo "Swap sementara berhasil dihapus. Sisa ruang eMMC kembali normal."
+# Fungsi otomatis untuk mengembalikan ZRAM ke default Armbian (50%) & menghapus sisa swapfile jika ada
+restore_default_swap() {
+  echo "=== Mengembalikan konfigurasi Swap (ZRAM) ke default Armbian ==="
+  swapoff /swapfile_temp 2>/dev/null || true
+  rm -f /swapfile_temp
+  if [ -f /etc/default/armbian-zram-config ]; then
+    sed -i 's/PERCENT=.*/PERCENT=50/g' /etc/default/armbian-zram-config
+    systemctl restart armbian-zram-config 2>/dev/null || true
   fi
 }
 
-# Pasang trap: Jika script selesai ATAU terhenti karena error, swap sementara otomatis dihapus
-trap cleanup_swap EXIT
+# Pasang trap: Jika script selesai ATAU terhenti karena error, swap otomatis kembali ke default
+trap restore_default_swap EXIT
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
-apt-get install -y curl build-essential git python3 python3-pip software-properties-common cron
+apt-get update && apt-get install -y curl build-essential git python3 python3-pip software-properties-common cron
 apt-get clean
 
-echo "=== 2. Menginstal Node.js v20 (LTS) ==="
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs
-apt-get clean
+echo "=== 2. Memeriksa Node.js & Mengatur NPM v10 (Anti Error EALLOWREMOTE) ==="
+# Jika Node.js belum terinstal (misal belum instal Shinobi), instal Node.js v20 LTS
+if ! command -v node &> /dev/null; then
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt-get install -y nodejs
+  apt-get clean
+fi
 
-# Verifikasi instalasi Node.js
+# Pastikan PM2 terinstal dan paksa npm ke versi 10 agar paket xlsx n8n tidak diblokir di Node v22
+npm install -g pm2 npm@10 --no-audit --no-fund
+hash -r
+
+# Verifikasi versi Node.js dan NPM
 node -v
 npm -v
 
-echo "=== 3. Membuat Swap Sementara (1.5 GB) untuk HG680P RAM 1GB ==="
-swapoff "$SWAP_FILE" 2>/dev/null || true
-rm -f "$SWAP_FILE"
+echo "=== 3. Menyiapkan Ruang eMMC & ZRAM Swap untuk HG680P RAM 1GB ==="
+# Jika Shinobi (camera) sedang berjalan di PM2, hentikan sementara agar RAM 1GB fokus untuk instalasi n8n
+pm2 stop camera 2>/dev/null || true
 
-dd if=/dev/zero of="$SWAP_FILE" bs=1M count=1536 status=progress
-chmod 600 "$SWAP_FILE"
-mkswap "$SWAP_FILE"
-swapon "$SWAP_FILE"
-free -h
-
-echo "=== 4. Menginstal PM2 dan n8n v1.94.0 via npm ==="
-# Bersihkan sisa folder n8n yang sempat gagal sebelumnya
-rm -rfv /usr/lib/node_modules/n8n /usr/local/lib/node_modules/n8n
+# Bersihkan sisa sampah instalasi sebelumnya agar ruang eMMC lega
+swapoff /swapfile_temp 2>/dev/null || true
+rm -f /swapfile_temp
+rm -rf /usr/lib/node_modules/n8n /usr/local/lib/node_modules/n8n
+apt-get clean
+apt-get autoclean -y
+apt-get autoremove -y
 npm cache clean --force
+rm -rf /root/.npm /root/.node-gyp /tmp/* /var/tmp/*
 
-# Instal PM2 terlebih dahulu
-npm install -g pm2 --no-audit --no-fund
+# Naikkan ZRAM sementara ke 150% (Swap di RAM tanpa memakan kapasitas eMMC 8GB!)
+if [ -f /etc/default/armbian-zram-config ]; then
+  sed -i 's/PERCENT=.*/PERCENT=150/g' /etc/default/armbian-zram-config
+  systemctl restart armbian-zram-config 2>/dev/null || true
+fi
+free -h
+df -h /
 
-# Instal n8n dengan pembatasan RAM Node.js (768MB) dan koneksi tunggal
-NODE_OPTIONS="--max-old-space-size=768" npm install -g n8n@1.94.0 --maxsockets=1 --no-audit --no-fund --verbose
+echo "=== 4. Menginstal n8n v1.94.0 via npm ==="
+NODE_OPTIONS="--max-old-space-size=700" npm install -g n8n@1.94.0 --maxsockets=1 --omit=dev --no-audit --no-fund --verbose
 
-echo "=== 5. Menghapus Swap Sementara (Kembali ke Default Swap Armbian) ==="
-cleanup_swap
+echo "=== 5. Mengembalikan Swap ke Default Armbian & Membersihkan Cache NPM ==="
+npm cache clean --force
+rm -rf /root/.npm /root/.node-gyp /tmp/*
+restore_default_swap
 
 echo "=== 6. Membuat File Konfigurasi .env & Folder Downloads ==="
-# Buat folder di /root/n8n/downloads dan /home/node/downloads (dihubungkan via symlink)
-mkdir -p /root/n8n/downloads
-mkdir -p /home/node
+mkdir -p /root/n8n/downloads /home/node
 ln -sfn /root/n8n/downloads /home/node/downloads
 cd /root/n8n
 
-# Tulis langsung konfigurasi .env
 cat << 'EOT' > /root/n8n/.env
 # --- Network & IP Config ---
 N8N_HOST=0.0.0.0
@@ -97,9 +105,7 @@ EXECUTIONS_DATA_PRUNE_MAX_COUNT=15
 EXECUTIONS_DATA_PRUNE=true
 
 # --- Optimasi Tambahan Khusus STB HG680P (RAM 1GB & eMMC 8GB) ---
-# Simpan file binary di disk (bukan di RAM) agar STB tidak hang saat proses file
 N8N_DEFAULT_BINARY_DATA_MODE=filesystem
-# Matikan telemetri & pengecekan update latar belakang agar hemat RAM/CPU
 N8N_DIAGNOSTICS_ENABLED=false
 N8N_VERSION_NOTIFICATIONS_ENABLED=false
 EOT
@@ -111,7 +117,11 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 cloudflared service uninstall 2>/dev/null || true
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
-echo "=== 8. Menjalankan n8n dengan PM2 ==="
+echo "=== 8. Menjalankan Shinobi (Jika Ada) & n8n secara Bersamaan di PM2 ==="
+# Nyalakan kembali Shinobi (camera) jika sebelumnya terinstal
+pm2 start camera 2>/dev/null || true
+
+# Hapus instance n8n lama jika ada
 pm2 delete n8n 2>/dev/null || true
 
 # Muat isi file .env ke environment sistem agar 100% terbaca oleh PM2 dan n8n
@@ -119,17 +129,17 @@ set -a
 source /root/n8n/.env
 set +a
 
-# Jalankan n8n dengan batas memori 700MB dan simpan variabel environment-nya
+# Jalankan n8n dengan batas memori 450MB (aman berbagi RAM 1GB dengan Shinobi)
 N8N_BIN=$(which n8n)
-pm2 start "$N8N_BIN" --name "n8n" --max-memory-restart 700M --node-args="--max-old-space-size=700" --update-env
+pm2 start "$N8N_BIN" --name "n8n" --max-memory-restart 450M --node-args="--max-old-space-size=450" --update-env
 
 # Pasang pembatas ukuran log PM2 (Maksimal 10MB per file, simpan 2 file)
-pm2 install pm2-logrotate
+pm2 install pm2-logrotate 2>/dev/null || true
 pm2 set pm2-logrotate:max_size 10M
 pm2 set pm2-logrotate:retain 2
 pm2 set pm2-logrotate:compress true
 
-# Simpan konfigurasi PM2 agar bertahan saat reboot
+# Simpan konfigurasi PM2 agar Shinobi + n8n bertahan saat reboot
 pm2 save
 env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root || true
 
@@ -169,10 +179,10 @@ apt-get clean
 apt-get autoclean -y
 apt-get autoremove -y --purge
 npm cache clean --force
-# Hapus cache umum KECUALI folder .cache/n8n agar frontend n8n tetap aman
+# Hapus isi /root/.cache KECUALI folder /root/.cache/n8n agar frontend n8n tidak hilang
 find /root/.cache -mindepth 1 ! -regex '^/root/\.cache/n8n\(/.*\)?' -delete 2>/dev/null || true
 rm -rf /root/.npm /root/.node-gyp /tmp/* /var/tmp/*
-journalctl --vacuum-size=20M
+journalctl --vacuum-size=10M
 pm2 flush
 sync && echo 3 > /proc/sys/vm/drop_caches
 echo "=== Status Penyimpanan eMMC & RAM Saat Ini ==="
@@ -185,11 +195,7 @@ chmod +x /usr/local/bin/clean-stb
 ln -sf /usr/local/bin/clean-stb /etc/cron.daily/n8n-cleaner
 
 echo "=== 10. Membersihkan Seluruh Cache Pasca-Instalasi ==="
-# Hapus kompilator C++/Python yang sudah tidak terpakai setelah instalasi selesai (hemat ~350MB)
-apt-get purge -y build-essential python3-pip
 rm -rf /var/lib/apt/lists/*
-
-# Jalankan pembersihan menyeluruh untuk pertama kali
 /usr/local/bin/clean-stb
 
 echo "=== Instalasi & Optimasi Selesai Sepenuhnya ==="
