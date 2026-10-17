@@ -12,7 +12,7 @@ apt-get autoremove -y
 apt-get autoclean
 
 echo "2. Menginstal MOC, plugin codec, dan ALSA murni..."
-# apt-get update
+apt-get update
 apt-get install -y moc moc-ffmpeg-plugin alsa-utils
 
 # Fungsi untuk membuat konfigurasi MOC di direktori target
