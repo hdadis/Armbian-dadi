@@ -1,18 +1,18 @@
 #!/bin/bash
 
 # ==========================================================================
-# SKRIP INSTALASI NGINX-LIGHT & AUTO-REFRESH UNTUK STB HG680P (ARMBIAN)
+# SKRIP MASTER INSTALASI NGINX-LIGHT & AUTO-REFRESH STB HG680P (FINAL)
 # ==========================================================================
 
 set -e
 
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ Error: Harap jalankan skrip ini dengan sudo! (sudo ./install_nginx.sh)"
+  echo "❌ Error: Harap jalankan skrip ini sebagai root atau dengan sudo!"
   exit 1
 fi
 
-# Deteksi user asli yang menjalankan sudo
-TARGET_USER="${SUDO_USER:-armbian}"
+# Deteksi user asli yang menjalankan skrip (mendukung penuh login langsung sebagai root)
+TARGET_USER="${SUDO_USER:-$(whoami)}"
 if ! id "$TARGET_USER" &>/dev/null; then
   TARGET_USER="root"
 fi
@@ -40,7 +40,7 @@ apt-get install -y -qq nginx-light --no-install-recommends
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-# 2. Membuat Folder Website & File Index
+# 2. Membuat Folder Website & File Index (Tidak akan menimpa file yang sudah Anda upload)
 echo "⏳ Menyiapkan direktori website..."
 mkdir -p "$FOLDER_WEB"
 
@@ -70,30 +70,30 @@ cat << 'EOF' > "$FOLDER_WEB/index.html"
 EOF
 fi
 
-# 3. Pengaturan Hak Akses (Setgid)
+# 3. Pengaturan Hak Akses (Setgid & Izin Traverse Direktori Home/Root)
 echo "⏳ Mengatur izin akses folder..."
 chown -R "$TARGET_USER":www-data "$FOLDER_WEB"
 chmod -R 2755 "$FOLDER_WEB"
-chmod o+x "$USER_HOME"
+# Memastikan grup www-data bisa melewati folder /root atau /home/user tanpa Error 403
+chmod 711 "$USER_HOME"
 
-# 4. Injeksi Optimasi Hardware STB
+# 4. Injeksi Optimasi Hardware STB (Bebas Konflik Duplikat dengan nginx.conf bawaan)
 echo "⏳ Menerapkan tuning performa..."
-cat << 'EOF' > /etc/nginx/conf.d/stb-optimizations.conf
-server_tokens off;
-tcp_nopush on;
-tcp_nodelay on;
-types_hash_max_size 2048;
+NGINX_CONF="/etc/nginx/nginx.conf"
 
+# Aktifkan server_tokens off & Gzip langsung di nginx.conf bawaan jika masih bertanda komentar (#)
+sed -i 's/# server_tokens off;/server_tokens off;/g' "$NGINX_CONF"
+sed -i 's/# gzip_vary on;/gzip_vary on;/g' "$NGINX_CONF"
+sed -i 's/# gzip_proxied any;/gzip_proxied any;/g' "$NGINX_CONF"
+sed -i 's/# gzip_comp_level 6;/gzip_comp_level 4;/g' "$NGINX_CONF"
+sed -i 's/# gzip_types/gzip_types/g' "$NGINX_CONF"
+
+# Tambahkan konfigurasi Open File Cache di file terpisah (Aman dari duplikat)
+cat << 'EOF' > /etc/nginx/conf.d/stb-optimizations.conf
 open_file_cache max=1000 inactive=20s;
 open_file_cache_valid 30s;
 open_file_cache_min_uses 2;
 open_file_cache_errors on;
-
-gzip_vary on;
-gzip_proxied any;
-gzip_comp_level 4;
-gzip_min_length 256;
-gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;
 EOF
 
 # 5. Konfigurasi Server Block Utama
@@ -164,14 +164,15 @@ cat << EOF > "$SCRIPT_REFRESH"
 # ==========================================================================
 
 echo "🔄 Memperbarui izin akses file di $FOLDER_WEB..."
-sudo chown -R $TARGET_USER:www-data "$FOLDER_WEB"
-sudo find "$FOLDER_WEB" -type d -exec chmod 2755 {} +
-sudo find "$FOLDER_WEB" -type f -exec chmod 644 {} +
+chmod 711 "$USER_HOME"
+chown -R $TARGET_USER:www-data "$FOLDER_WEB"
+find "$FOLDER_WEB" -type d -exec chmod 2755 {} +
+find "$FOLDER_WEB" -type f -exec chmod 644 {} +
 
 echo "🔍 Memeriksa konfigurasi Nginx..."
-if sudo nginx -t; then
+if nginx -t; then
     echo "⚡ Memuat ulang (Reload) layanan Nginx..."
-    sudo systemctl reload nginx
+    systemctl reload nginx
     echo "✅ BERHASIL! Website dan konfigurasi telah diperbarui."
 else
     echo "❌ GAGAL! Ada kesalahan pada konfigurasi Nginx, reload dibatalkan."
@@ -179,7 +180,6 @@ else
 fi
 EOF
 
-# Memberikan izin eksekusi pada skrip refresh & membuat shortcut global
 chown "$TARGET_USER":"$TARGET_USER" "$SCRIPT_REFRESH"
 chmod +x "$SCRIPT_REFRESH"
 ln -sf "$SCRIPT_REFRESH" /usr/local/bin/refresh-web
