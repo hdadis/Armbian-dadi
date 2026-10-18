@@ -1,59 +1,80 @@
 #!/bin/bash
 
-# Pastikan script dijalankan sebagai root (administrator)
+# Pastikan dijalankan sebagai root (sudo)
 if [ "$EUID" -ne 0 ]; then
-  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  echo "Harap jalankan skrip ini dengan hak akses sudo: sudo ./maclist.sh"
   exit 1
 fi
 
-echo "Menginstal aplikasi..."
-# Ganti dengan paket yang ingin Anda install, contoh:
-yes | sudo apt install -y iptables-persistent
-sudo iptables -N MAC_ALLOWLIST
-sudo iptables -A INPUT -m mac --mac-source C0:E3:FB:1A:E5:7F -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 9C:6B:00:15:1E:2F -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 78:53:33:43:29:DC -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 58:20:71:EC:8A:28 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source C8:90:8A:71:CE:EB -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 4C:BB:6F:5B:64:BC -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 7C:70:DB:2B:35:B3 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source C4:23:60:99:FB:5B -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source E8:A7:2F:0A:03:3E -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source FC:9D:05:38:0A:2E -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source AC:A7:F1:33:3C:4E -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source F0:A7:31:36:78:DB -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 30:de:4b:a8:4d:44 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 30:de:4b:a8:55:5f -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 98:25:4A:CC:15:07 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 30:DE:4B:81:67:95 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 38:2C:E5:0E:52:F5 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 8C:87:D0:19:E9:7D -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 3C:97:0E:E8:B6:7A -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 00:15:18:01:81:31 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source CA:6D:02:81:16:C7 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 58:85:E9:71:05:CF -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 94:83:c4:2c:ae:7c -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source CC:4D:75:96:B3:B8 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 44:46:87:80:6C:B1 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source D8:5D:E2:E6:C6:D1 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 40:F0:2F:D5:F8:81 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 50:E4:78:07:4A:10 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 30:8D:99:15:09:0E -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source e0:51:d8:18:ce:f8 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source D0:03:DF:11:7A:B5 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 74:23:44:E4:6E:86 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 10:2C:6B:7B:77:90 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 10:27:F5:44:60:C0 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 48:88:CA:69:3D:B2 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 50:0f:f5:90:7e:a8 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 74:51:BA:0F:2E:E1 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 00:E0:4C:68:40:43 -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source F2:5A:F9:24:1D:2E -j ACCEPT
-sudo iptables -A INPUT -m mac --mac-source 7e:90:45:5d:19:e2 -j ACCEPT
-sudo iptables -A INPUT -j DROP
-sudo netfilter-persistent save
-nano /etc/iptables/rules.v4
+echo "[1/4] Membuat daftar whitelist MAC address..."
+cat << 'EOF' > /etc/mac_whitelist.txt
+C0:E3:FB:1A:E5:7F
+74:51:BA:0F:2E:E1
+FC:9D:05:38:0A:2E
+78:53:33:43:29:DC
+58:20:71:EC:8A:28
+C8:90:8A:71:CE:EB
+E8:A7:2F:0A:03:3E
+7C:70:DB:2B:35:B3
+4C:BB:6F:5B:64:BC
+AC:A7:F1:33:3C:4E
+F0:A7:31:36:78:DB
+30:DE:4B:A8:4D:44
+30:DE:4B:A8:55:5F
+98:25:4A:CC:15:07
+30:DE:4B:81:67:95
+38:2C:E5:0E:52:F5
+8C:87:D0:19:E9:7D
+3C:97:0E:E8:B6:7A
+00:15:18:01:81:31
+CC:4D:75:96:B3:B8
+9C:6B:00:15:1E:2F
+58:85:E9:71:05:CF
+94:83:C4:2C:AE:7C
+44:46:87:80:6C:B1
+D8:5D:E2:E6:C6:D1
+40:F0:2F:D5:F8:81
+30:8D:99:15:09:0E
+D0:03:DF:11:7A:B5
+74:23:44:E4:6E:86
+10:27:F5:44:60:C0
+EOF
 
+echo "[2/4] Membuat skrip pembaruan firewall..."
+cat << 'EOF' > /usr/local/bin/update-mac-filter.sh
+#!/bin/bash
+iptables -N MAC_FILTER 2>/dev/null
+iptables -F MAC_FILTER
+iptables -A MAC_FILTER -i lo -j RETURN
 
+grep -v '^#' /etc/mac_whitelist.txt | grep -v '^$' | while read -r mac; do
+    iptables -A MAC_FILTER -m mac --mac-source "$mac" -j RETURN
+done
 
+iptables -A MAC_FILTER -j DROP
+
+iptables -D INPUT -p udp --dport 53 -j MAC_FILTER 2>/dev/null
+iptables -D INPUT -p tcp --dport 53 -j MAC_FILTER 2>/dev/null
+iptables -I INPUT -p udp --dport 53 -j MAC_FILTER
+iptables -I INPUT -p tcp --dport 53 -j MAC_FILTER
+
+echo "Filter MAC Address berhasil diterapkan!"
+EOF
+
+chmod +x /usr/local/bin/update-mac-filter.sh
+
+echo "[3/4] Menjadikan skrip utama sebagai perintah global (maclist)..."
+# Menyalin file ini langsung ke folder /usr/local/bin/ dan mengubah namanya menjadi maclist
+cp "$0" /usr/local/bin/maclist
+chmod +x /usr/local/bin/maclist
+
+echo "[4/4] Menjalankan aturan firewall & menyimpan konfigurasi..."
+/usr/local/bin/update-mac-filter.sh
+apt update && apt install iptables-persistent -y
+netfilter-persistent save
+
+echo "===================================================="
 echo "Instalasi selesai!"
+echo "Sekarang Anda bisa menjalankan perintah kapan saja dengan:"
+echo "sudo maclist"
+echo "===================================================="
