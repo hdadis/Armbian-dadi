@@ -2,8 +2,8 @@ sudo tee /root/cleanup.sh >/dev/null << 'EOF'
 #!/bin/bash
 
 # ==============================================================================
-# Script Pembersihan Menyeluruh & Auto-Cron (Armbian STB HG680P)
-# Terintegrasi: n8n (5 Jam & Kuota 15 File), Purge Compiler, MOCP Safe, AdGuard
+# Script Pembersihan Menyeluruh, Auto-Cron & Refresh Nginx (Armbian STB HG680P)
+# Terintegrasi: n8n (5 Jam & Kuota 15 File), Purge Compiler, MOCP Safe, AdGuard, Nginx
 # ==============================================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -23,6 +23,12 @@ CLEAN_DIRS=(
   "/root/Downloads"
 )
 
+WEB_DIRS=(
+  "/root/website"
+  "/home/armbian/website"
+  "/home/dadi/website"
+)
+
 clean_n8n_files() {
   for d in "${CLEAN_DIRS[@]}"; do
     if [ -d "$d" ]; then
@@ -31,8 +37,40 @@ clean_n8n_files() {
   done
 }
 
+refresh_nginx_web() {
+  if command -v nginx >/dev/null 2>&1; then
+    echo "[+] Memperbarui izin akses folder website & memuat ulang Nginx..."
+    chmod 711 /root 2>/dev/null || true
+    for w in "${WEB_DIRS[@]}"; do
+      if [ -d "$w" ]; then
+        OWNER_USER=$(stat -c '%U' "$(dirname "$w")")
+        chmod o+x "$(dirname "$w")" 2>/dev/null || true
+        chown -R "$OWNER_USER":www-data "$w"
+        find "$w" -type d -exec chmod 2755 {} +
+        find "$w" -type f -exec chmod 644 {} +
+      fi
+    done
+
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx
+      echo "[+] Berhasil! Izin file website diperbarui & Nginx telah di-reload."
+    else
+      echo "[-] Peringatan: Konfigurasi Nginx bermasalah, reload dibatalkan!"
+      nginx -t
+    fi
+  fi
+}
+
 # ------------------------------------------------------------------------------
-# MODE CEPAT (Dipanggil tiap 10 menit oleh Cron): Cek kuota maksimal 15 file
+# MODE CEPAT 1 (Dipanggil lewat perintah 'refresh-web'): Hanya Refresh Nginx
+# ------------------------------------------------------------------------------
+if [ "$MODE" = "--web-only" ]; then
+  refresh_nginx_web
+  exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# MODE CEPAT 2 (Dipanggil tiap 10 menit oleh Cron): Cek kuota maksimal 15 file
 # ------------------------------------------------------------------------------
 if [ "$MODE" = "--quota-only" ]; then
   TOTAL_FILES=0
@@ -61,7 +99,14 @@ if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
   echo "[+] Menyalin script secara permanen ke $SCRIPT_PATH..."
 fi
 
-rm -f /etc/cron.d/n8n-cleaner /usr/local/bin/n8n-cleaner.sh 2>/dev/null || true
+# Buat shortcut perintah global 'refresh-web' yang mengarah ke mode --web-only
+cat << 'EOS' > /usr/local/bin/refresh-web
+#!/bin/bash
+sudo /bin/bash /root/cleanup.sh --web-only
+EOS
+chmod +x /usr/local/bin/refresh-web
+
+rm -f /etc/cron.d/n8n-cleaner /usr/local/bin/n8n-cleaner.sh /root/refresh.sh 2>/dev/null || true
 
 # 1. Fitur Otomatisasi Cron (Setiap 5 jam & cek kuota 15 file tiap 10 menit)
 echo "[+] Memperbarui jadwal otomatis di Cron (Setiap 5 Jam & Kuota $MAX_FILES File)..."
@@ -152,12 +197,15 @@ if command -v pm2 &> /dev/null; then
   done
 fi
 
-# 11. Membersihkan cache user lokal (root dan semua user di /home)
+# 11. Refresh Izin Akses Website & Reload Nginx
+refresh_nginx_web
+
+# 12. Membersihkan cache user lokal (root dan semua user di /home)
 echo "[+] Membersihkan cache user lokal..."
 rm -rf /root/.cache/* 2>/dev/null || true
 rm -rf /home/*/.cache/* 2>/dev/null || true
 
-# 12. Menyegarkan RAM Cache
+# 13. Menyegarkan RAM Cache
 echo "[+] Menyegarkan cache RAM sistem..."
 sync && echo 3 > /proc/sys/vm/drop_caches
 
@@ -168,8 +216,9 @@ echo "--------------------------------------------------"
 echo "Status RAM & Swap Saat Ini:"
 free -h
 echo "--------------------------------------------------"
-echo "[+] PEMBERSIHAN SELESAI & TERJADWAL OTOMATIS!"
-echo "[+] STB Anda akan di-refresh otomatis setiap 5 jam & dibatasi maks $MAX_FILES file."
+echo "[+] PEMBERSIHAN & REFRESH NGINX SELESAI!"
+echo "[+] Jadwal otomatis: Tiap 5 jam (Full) | Tiap 10 menit (Kuota $MAX_FILES file)."
+echo "[+] Ketik 'refresh-web' kapan saja untuk refresh cepat Nginx."
 echo "--------------------------------------------------"
 EOF
 
