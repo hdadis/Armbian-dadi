@@ -3,7 +3,7 @@ sudo tee /root/cleanup.sh >/dev/null << 'EOF'
 
 # ==============================================================================
 # Script Pembersihan Menyeluruh, Auto-Cron & Refresh Nginx (Armbian STB HG680P)
-# Terintegrasi: n8n Safe UI, Purge Compiler, MOCP Safe, AdGuard, Nginx
+# Terintegrasi: n8n Safe UI, Purge Compiler, MOCP Safe, AdGuard Clean, Nginx
 # ==============================================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -172,15 +172,15 @@ echo "[+] Membersihkan file temporary (/tmp dan /var/tmp) tanpa memutus MOCP..."
 find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
 find /var/tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
 
-# 9. Membersihkan Query Log AdGuard Home (jika layanannya aktif)
+# 9. Membersihkan Query Log, Statistik, & Cache AdGuard Home secara Total (File-based)
 if systemctl is-active --quiet AdGuardHome; then
-  echo "[+] Membersihkan query log AdGuard Home..."
+  echo "[+] Membersihkan Query Log, Statistik, dan Cache AdGuard Home..."
   systemctl stop AdGuardHome
-  if [ -f /opt/AdGuardHome/data/querylog.json ]; then
-    echo '{"data":[]}' > /opt/AdGuardHome/data/querylog.json
-  fi
-  rm -f /opt/AdGuardHome/data/querylog.json.1 2>/dev/null || true
+  rm -f /opt/AdGuardHome/data/querylog.json* 2>/dev/null || true
+  rm -f /opt/AdGuardHome/data/stats.db 2>/dev/null || true
+  rm -f /opt/AdGuardHome/data/cache.db 2>/dev/null || true
   systemctl start AdGuardHome
+  echo "[+] Selesai! Statistik AdGuard Home telah di-reset ke 0."
 fi
 
 # 10. Membersihkan PM2 log (untuk root dan untuk user biasa seperti dadi)
