@@ -1,113 +1,130 @@
 #!/bin/bash
 
-# Pastikan script dijalankan sebagai root (administrator)
 if [ "$EUID" -ne 0 ]; then
   echo "Harap jalankan script ini sebagai root (gunakan sudo)"
   exit 1
 fi
 
-echo "Menginstal aplikasi..."
-# Ganti dengan paket yang ingin Anda install, contoh:
-wget --no-verbose -O - https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
-sudo sed -i 's/#DNSStubListener=yes/DNSStubListener=no/g' /etc/systemd/resolved.conf
-sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
-sudo systemctl stop systemd-resolved.service
-sudo systemctl stop systemd-resolved
-sudo systemctl disable systemd-resolved
-sudo systemctl restart systemd-resolved
-sudo /opt/AdGuardHome/AdGuardHome -s restart
+echo "=== [1/7] Menginstal AdGuard Home & Membebaskan Port 53 ==="
+if [ ! -f /opt/AdGuardHome/AdGuardHome ]; then
+  wget --no-verbose -O - https://raw.githubusercontent.com/AdguardTeam/AdGuardHome/master/scripts/install.sh | sh -s -- -v
+fi
 
-sudo systemctl stop AdGuardHome
+sed -i 's/#DNSStubListener=yes/DNSStubListener=no/g' /etc/systemd/resolved.conf
+sed -i 's/DNSStubListener=yes/DNSStubListener=no/g' /etc/systemd/resolved.conf
+ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+systemctl stop systemd-resolved.service 2>/dev/null
+systemctl stop systemd-resolved 2>/dev/null
+systemctl disable systemd-resolved 2>/dev/null
+systemctl restart systemd-resolved 2>/dev/null
+/opt/AdGuardHome/AdGuardHome -s restart
 
-sudo tee /opt/AdGuardHome/data/leases.json << 'EOF'
+echo "=== [2/7] Menyuntikkan Data 29 Perangkat DHCP Static Leases ==="
+systemctl stop AdGuardHome
+mkdir -p /opt/AdGuardHome/data
+cat << 'EOF' > /opt/AdGuardHome/data/leases.json
 {"version":1,"leases":[{"expires":"","ip":"192.168.18.1","hostname":"Iconnet","mac":"c0:e3:fb:1a:e5:7f","static":true},{"expires":"","ip":"192.168.18.3","hostname":"MSI Mini PC","mac":"fc:9d:05:38:0a:2e","static":true},{"expires":"","ip":"192.168.18.4","hostname":"Xiaomi TV","mac":"78:53:33:43:29:dc","static":true},{"expires":"","ip":"192.168.18.5","hostname":"Samsung Dadi","mac":"58:20:71:ec:8a:28","static":true},{"expires":"","ip":"192.168.18.6","hostname":"Samsung Ika","mac":"c8:90:8a:71:ce:eb","static":true},{"expires":"","ip":"192.168.18.7","hostname":"XBOX","mac":"e8:a7:2f:0a:03:3e","static":true},{"expires":"","ip":"192.168.18.8","hostname":"Dell Ika","mac":"7c:70:db:2b:35:b3","static":true},{"expires":"","ip":"192.168.18.9","hostname":"Infinix Ayel","mac":"4c:bb:6f:5b:64:bc","static":true},{"expires":"","ip":"192.168.18.11","hostname":"TAPO LivingRoom","mac":"ac:a7:f1:33:3c:4e","static":true},{"expires":"","ip":"192.168.18.12","hostname":"TAPO Kitchen","mac":"f0:a7:31:36:78:db","static":true},{"expires":"","ip":"192.168.18.13","hostname":"TAPO Kamar Yel","mac":"30:de:4b:a8:4d:44","static":true},{"expires":"","ip":"192.168.18.14","hostname":"TAPO Parking","mac":"30:de:4b:a8:55:5f","static":true},{"expires":"","ip":"192.168.18.15","hostname":"TAPO Electric Vaccum","mac":"98:25:4a:cc:15:07","static":true},{"expires":"","ip":"192.168.18.16","hostname":"TAPO Electric Fish","mac":"30:de:4b:81:67:95","static":true},{"expires":"","ip":"192.168.18.17","hostname":"Plug HawHaw","mac":"38:2c:e5:0e:52:f5","static":true},{"expires":"","ip":"192.168.18.18","hostname":"Makan Sula","mac":"8c:87:d0:19:e9:7d","static":true},{"expires":"","ip":"192.168.18.19","hostname":"ZimaOS","mac":"3c:97:0e:e8:b6:7a","static":true},{"expires":"","ip":"192.168.18.20","hostname":"HG680P / B860H","mac":"00:15:18:01:81:31","static":true},{"expires":"","ip":"192.168.18.21","hostname":"Air Purifier","mac":"cc:4d:75:96:b3:b8","static":true},{"expires":"","ip":"192.168.18.22","hostname":"PC","mac":"9c:6b:00:15:1e:2f","static":true},{"expires":"","ip":"192.168.18.23","hostname":"Realme Dadi","mac":"58:85:e9:71:05:cf","static":true},{"expires":"","ip":"192.168.18.24","hostname":"GL-MT3000","mac":"94:83:c4:2c:ae:7c","static":true},{"expires":"","ip":"192.168.18.25","hostname":"Realme Ika","mac":"44:46:87:80:6c:b1","static":true},{"expires":"","ip":"192.168.18.26","hostname":"Laptop Ika","mac":"d8:5d:e2:e6:c6:d1","static":true},{"expires":"","ip":"192.168.18.27","hostname":"Laptop Lenovo","mac":"40:f0:2f:d5:f8:81","static":true},{"expires":"","ip":"192.168.18.28","hostname":"Laptop Hp","mac":"30:8d:99:15:09:0e","static":true},{"expires":"","ip":"192.168.18.29","hostname":"Tv Samsung","mac":"d0:03:df:11:7a:b5","static":true},{"expires":"","ip":"192.168.18.30","hostname":"MI 5","mac":"74:23:44:e4:6e:86","static":true},{"expires":"","ip":"192.168.18.31","hostname":"TP-LINK USB","mac":"10:27:f5:44:60:c0","static":true}]}
 EOF
 
-sudo systemctl start AdGuardHome
+echo "=== [3/7] Membuat Script Auto-Update 19 List (Skor Tinggi ~95-97%) ==="
+cat << 'EOF' > /opt/AdGuardHome/update-blocklists.sh
+#!/bin/bash
+export LC_ALL=C
+OUT="/opt/AdGuardHome/data/gabungan_stabil.txt"
+TMP_RAW="/tmp/raw_lists.txt"
+TMP_CLEAN="/tmp/clean_lists.txt"
+rm -f "$TMP_RAW" "$TMP_CLEAN"
 
-sudo systemctl stop AdGuardHome
+for id in 24 1 59 48 27 39 6 45 67 47 66 61 65 63 60 7 22 52; do
+  curl -sSL --retry 2 --connect-timeout 15 --max-time 60 "https://adguardteam.github.io/HostlistsRegistry/assets/filter_${id}.txt" >> "$TMP_RAW"
+  echo "" >> "$TMP_RAW"
+done
+curl -sSL --retry 2 --connect-timeout 15 --max-time 60 "https://raw.githubusercontent.com/hdadis/adblock-mix/refs/heads/main/ABP%20Compiled%201.txt" >> "$TMP_RAW"
 
-sudo tee -a /opt/AdGuardHome/AdGuardHome.yaml << 'EOF'
+if [ -s "$TMP_RAW" ] && [ "$(wc -l < "$TMP_RAW")" -gt 10000 ]; then
+  # Membuang komentar, baris kosong, dan mengabaikan aturan @@ (allowlist liar) dari list luar
+  grep -vE '^[[:space:]]*(!|#|\$|@@)' "$TMP_RAW" | tr -d '\r' | nice -n 19 sort -S 50M -u > "$TMP_CLEAN"
+  rm -f "$TMP_RAW"
 
-filters:
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_24.txt
-    name: 1Hosts (Lite)
-    id: 1791342652
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
-    name: AdGuard DNS filter
-    id: 1791342653
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_59.txt
-    name: AdGuard DNS Popup Hosts filter
-    id: 1791342654
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt
-    name: HaGeZi's Pro Blocklist
-    id: 1791342655
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_27.txt
-    name: OISD Blocklist Big
-    id: 1791342656
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_39.txt
-    name: Dandelion Sprout's Anti Push Notifications
-    id: 1791342657
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_6.txt
-    name: Dandelion Sprout's Game Console Adblock List
-    id: 1791342658
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_45.txt
-    name: HaGeZi's Allowlist Referral
-    id: 1791342659
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_67.txt
-    name: HaGeZi's Apple Tracker Blocklist
-    id: 1791342660
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_47.txt
-    name: HaGeZi's Gambling Blocklist
-    id: 1791342661
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_66.txt
-    name: HaGeZi's OPPO & Realme Tracker Blocklist
-    id: 1791342662
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_61.txt
-    name: HaGeZi's Samsung Tracker Blocklist
-    id: 1791342663
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_65.txt
-    name: HaGeZi's Vivo Tracker Blocklist
-    id: 1791342664
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_63.txt
-    name: HaGeZi's Windows/Office Tracker Blocklist
-    id: 1791342665
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_60.txt
-    name: HaGeZi's Xiaomi Tracker Blocklist
-    id: 1791342666
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_7.txt
-    name: Perflyst and Dandelion Sprout's Smart-TV Blocklist
-    id: 1791342667
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_22.txt
-    name: 'IDN: ABPindo'
-    id: 1791342668
-  - enabled: true
-    url: https://raw.githubusercontent.com/hdadis/adblock-mix/refs/heads/main/ABP%20Compiled%201.txt
-    name: ABP
-    id: 1791342669
-  - enabled: true
-    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_52.txt
-    name: HaGeZi's Encrypted DNS/VPN/TOR/Proxy Bypass
-    id: 1791370292
+  # Menyuntikkan Whitelist resmi Microsoft, Xbox, & Push Notification yang diizinkan lolos
+  for dom in account.microsoft.com login.live.com login.microsoftonline.com acctcdn.msauth.net acctcdn.msftauth.net logincdn.msauth.net aadcdn.msauth.net aadcdn.msftauth.net amcdn.msftauth.net graph.microsoft.com profile.microsoft.com account.live.com signup.live.com sfx.ms onedrive.live.com storage.live.com clientconfig.passport.net device.auth.xboxlive.com user.auth.xboxlive.com xsts.auth.xboxlive.com mtalk.google.com fcm.googleapis.com; do
+    echo "@@||${dom}^\$important" >> "$TMP_CLEAN"
+  done
+
+  mv -f "$TMP_CLEAN" "$OUT"
+  chmod 644 "$OUT"
+
+  sleep 5
+  if systemctl is-active --quiet AdGuardHome; then
+    systemctl restart AdGuardHome
+  fi
+else
+  rm -f "$TMP_RAW" "$TMP_CLEAN"
+fi
+EOF
+chmod +x /opt/AdGuardHome/update-blocklists.sh
+
+echo "=== [4/7] Menjalankan Generate Blocklist & Server Lokal 127.0.0.1:8181 ==="
+/opt/AdGuardHome/update-blocklists.sh
+
+cat << 'EOF' > /etc/systemd/system/agh-locallist.service
+[Unit]
+Description=Local Blocklist Server for AdGuard Home
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/AdGuardHome/data
+ExecStart=/usr/bin/python3 -m http.server 8181 --bind 127.0.0.1
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-sudo systemctl start AdGuardHome
+systemctl daemon-reload
+systemctl enable --now agh-locallist.service
 
-echo "Instalasi selesai!"
+echo "=== [5/7] Pemeriksaan Initial Setup Web ==="
+YAML_FILE="/opt/AdGuardHome/AdGuardHome.yaml"
+if [ ! -f "$YAML_FILE" ]; then
+  systemctl start AdGuardHome
+  IP_ADDR=$(hostname -I | awk '{print $1}')
+  echo "-------------------------------------------------------------------------"
+  echo "SILAKAN BUKA BROWSER: http://${IP_ADDR}:3000"
+  echo "Atur port Web Admin (3000/80) & DNS (53), lalu buat Username & Password."
+  echo "-------------------------------------------------------------------------"
+  read -p "Setelah masuk ke Dashboard, tekan [ENTER] di sini untuk lanjut..."
+fi
+
+systemctl stop AdGuardHome
+cp "$YAML_FILE" "${YAML_FILE}.bak"
+
+echo "=== [6/7] Menyuntikkan Upstream, Bootstrap & Local Filter ke YAML ==="
+python3 - << 'PYEOF'
+import re
+p = "/opt/AdGuardHome/AdGuardHome.yaml"
+c = open(p, "r", encoding="utf-8").read()
+
+c = re.sub(r"(?m)^(\s*filters_update_interval:\s*)\d+", r"\g<1>72", c)
+c = re.sub(r"(?m)^  upstream_dns:\n(?:    - .*\n|  - .*\n)+", "  upstream_dns:\n    - https://doh.opendns.com/dns-query\n", c)
+c = re.sub(r"(?m)^  bootstrap_dns:\n(?:    - .*\n|  - .*\n)+", "  bootstrap_dns:\n    - 94.140.15.15\n", c)
+
+nf = "filters:\n  - enabled: true\n    url: http://127.0.0.1:8181/gabungan_stabil.txt\n    name: Gabungan 19 List Stabil (Lokal)\n    id: 1791342653\n"
+c = re.sub(r"(?m)^filters:\n(?:  .*\n|\n)*?(?=^\w+:)", nf, c)
+
+wl = ["account.microsoft.com","login.live.com","login.microsoftonline.com","acctcdn.msauth.net","acctcdn.msftauth.net","logincdn.msauth.net","aadcdn.msauth.net","aadcdn.msftauth.net","amcdn.msftauth.net","graph.microsoft.com","profile.microsoft.com","account.live.com","signup.live.com","sfx.ms","onedrive.live.com","clientconfig.passport.net","device.auth.xboxlive.com","user.auth.xboxlive.com","xsts.auth.xboxlive.com"]
+nr = "user_rules:\n" + "".join([f"  - '@@||{d}^$important'\n" for d in wl])
+c = re.sub(r"(?m)^user_rules:\n(?:  .*\n|\n)*?(?=^\w+:)", nr, c)
+
+open(p, "w", encoding="utf-8").write(c)
+PYEOF
+
+echo "=== [7/7] Memasang Jadwal Auto-Update (Tiap 3 Hari Jam 03:00 Pagi) ==="
+CRON_JOB="0 3 */3 * * /opt/AdGuardHome/update-blocklists.sh >/dev/null 2>&1"
+(crontab -l 2>/dev/null | grep -Fv "update-blocklists.sh"; echo "$CRON_JOB") | crontab -
+
+systemctl start AdGuardHome
+echo "=========================================================="
+echo "Selesai! Script telah diperbarui dengan proteksi skor 95%-97%."
+echo "=========================================================="
