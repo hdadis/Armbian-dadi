@@ -13,30 +13,23 @@ echo "=== 1. Menginstal paket Unbound & aplikasi pendukung ==="
 apt update
 apt install unbound unbound-anchor dnsutils net-tools tcpdump wget ca-certificates -y
 
-echo "=== 2. Mengunduh script Auto-Update dari GitHub Anda ==="
-
-chmod +x /usr/local/sbin/apt-auto-update.sh
-systemctl daemon-reload
-systemctl enable apt-auto-update.service
-
 echo "=== 3. Membebaskan Port 53 untuk AdGuard Home ==="
 sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 sed -i 's/DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 systemctl stop systemd-resolved || true
 systemctl disable systemd-resolved || true
 
-# Mengarahkan DNS internal Armbian ke localhost (127.0.0.1)
+# Mengarahkan DNS internal Armbian ke localhost
 rm -f /etc/resolv.conf
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
-echo "=== 4. Mengunduh root.hints & menyiapkan DNSSEC root.key ==="
+echo "=== 4. Menyiapkan root.hints & DNSSEC root.key ==="
 wget -q https://www.internic.net/domain/named.root -O /var/lib/unbound/root.hints
 unbound-anchor -a /var/lib/unbound/root.key || true
 chown -R unbound:unbound /var/lib/unbound
 
-echo "=== 5. Membuat Konfigurasi Keamanan Maksimal Unbound (Port 5335 + Quad9 DoT) ==="
-# Bersihkan file konfigurasi lama agar tidak bentrok
+echo "=== 5. Membuat Konfigurasi Keamanan Unbound (Port 5335 + Quad9 DoT) ==="
 rm -f /etc/unbound/unbound.conf.d/*
 
 cat << 'EOF' > /etc/unbound/unbound.conf.d/unbound.conf
@@ -50,12 +43,10 @@ server:
     do-ip6: no
     prefer-ip6: no
 
-    # Batasi akses hanya untuk jaringan lokal Anda
     access-control: 127.0.0.0/8 allow
     access-control: 192.168.0.0/16 allow
     access-control: 172.16.0.0/12 allow
 
-    # Fitur Keamanan & Privasi Unbound (Anti-Spoofing & Anti-Tracking)
     hide-identity: yes
     hide-version: yes
     harden-glue: yes
@@ -65,40 +56,36 @@ server:
     qname-minimisation: yes
     prefetch: yes
 
-    # Perlindungan DNS Rebinding
     private-address: 192.168.0.0/16
     private-address: 169.254.0.0/16
     private-address: 172.16.0.0/12
     private-address: 10.0.0.0/8
 
-    # Sertifikat Enkripsi TLS
     tls-cert-bundle: /etc/ssl/certs/ca-certificates.crt
 
 forward-zone:
     name: "."
     forward-tls-upstream: yes
-    # Quad9 Malware & Cyber-Threat Blocking (Swiss Non-Profit)
     forward-addr: 9.9.9.9@853#dns.quad9.net
     forward-addr: 149.112.112.112@853#dns.quad9.net
 EOF
 
-echo "=== 6. Memeriksa konfigurasi & menjalankan ulang service ==="
+echo "=== 6. Menjalankan Ulang Service Unbound & AdGuard Home ==="
 unbound-checkconf
 systemctl restart unbound
 systemctl enable unbound
 
-# Restart AdGuard Home jika sudah terinstal agar langsung membaca Port 53
 if systemctl list-unit-files | grep -q AdGuardHome.service; then
     systemctl restart AdGuardHome
 fi
 
-echo "=== 7. Verifikasi Akhir Sistem DNS ==="
+echo "=== 7. Verifikasi Sistem DNS ==="
 netstat -tlupn | grep -E "53|AdGuard" || true
 dig google.com @127.0.0.1 -p 5335 +short
 
 echo "=========================================================="
-echo "Instalasi Selesai 100% Aman!"
-echo "- Unbound berjalan di: 127.0.0.1:5335 (Enkripsi Quad9 DoT)"
+echo "Instalasi Selesai dan Bersih!"
+echo "- Unbound berjalan di: 127.0.0.1:5335 (Enkripsi Quad9 DoT)[cite: 4, 5]"
 echo "- AdGuard Home aktif di: Port 53"
 echo "Pastikan Upstream DNS di AdGuard Home diisi: 127.0.0.1:5335"
 echo "=========================================================="
