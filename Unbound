@@ -1,46 +1,66 @@
 #!/bin/bash
 
+# Hentikan script jika ada perintah kritis yang gagal
+set -e
+
 # Pastikan script dijalankan sebagai root (administrator)
 if [ "$EUID" -ne 0 ]; then
   echo "Harap jalankan script ini sebagai root (gunakan sudo)"
   exit 1
 fi
 
-echo "Menginstal aplikasi..."
-# Ganti dengan paket yang ingin Anda install, contoh:
-yes | sudo apt update -y
-sudo apt install unbound unbound-anchor dnsutils net-tools tcpdump -y
+UNBOUND_PORT=5335
+
+echo "=== 1. Menginstal aplikasi pendukung & Unbound ==="
+apt update
+apt install unbound unbound-anchor dnsutils net-tools tcpdump wget -y
 dig -v
 
-echo "Copy Configuration Unbound..."
-sudo wget -O /etc/unbound/unbound.conf.d/unbound.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound3
-sudo wget -O /etc/systemd/system/apt-auto-update.service https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound4
-sudo wget -O /usr/local/sbin/apt-auto-update.sh https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound5
+echo "=== 2. Mengunduh konfigurasi Unbound & Auto-Update ==="
+wget -q -O /etc/unbound/unbound.conf.d/unbound.conf https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound3
+wget -q -O /etc/systemd/system/apt-auto-update.service https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound4
+wget -q -O /usr/local/sbin/apt-auto-update.sh https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound5
 
-sudo sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
-sudo systemctl restart systemd-resolved
-sudo wget https://internic.net -O /var/lib/unbound/root.hints
-sudo wget https://www.internic.net/domain/named.root -O /var/lib/unbound/root.hints
-sudo chmod +x /usr/local/sbin/apt-auto-update.sh
-sudo unbound-checkconf
+chmod +x /usr/local/sbin/apt-auto-update.sh
+systemctl daemon-reload
+systemctl enable apt-auto-update.service
 
-sudo unbound-anchor -a /etc/unbound/root.key
+echo "=== 3. Membebaskan Port 53 untuk AdGuard Home ==="
+sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
+sed -i 's/DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
+systemctl restart systemd-resolved
 
+echo "=== 4. Mengunduh root.hints dan menyiapkan DNSSEC root.key ==="
+wget -q https://www.internic.net/domain/named.root -O /var/lib/unbound/root.hints
 
-sudo systemctl restart unbound
-sudo systemctl enable unbound
-sudo systemctl status unbound
+# Menyiapkan kunci DNSSEC di kedua lokasi umum (/var/lib/unbound & /etc/unbound)
+# agar aman apa pun isi konfigurasi di file Unbound3 Anda
+unbound-anchor -a /var/lib/unbound/root.key || true
+cp /var/lib/unbound/root.key /etc/unbound/root.key
+chown -R unbound:unbound /var/lib/unbound /etc/unbound
 
-cd /etc/unbound
-netstat -anput
-ip addr
-tcpdump -^C
-whereis tcpdump
-/usr/bin/tcpdump -ni enp0s3 udp port 53
+echo "=== 5. Memastikan Unbound berjalan di Port $UNBOUND_PORT ==="
+# Mengubah pengaturan port di file Unbound3 menjadi 5335 jika sebelumnya tertulis port: 53
+sed -i "s/port: 53$/port: $UNBOUND_PORT/g" /etc/unbound/unbound.conf.d/unbound.conf
 
-dig sigok.verteiltesysteme.net @127.0.0.1
-dig sigfail.verteiltesysteme.net @127.0.0.1
-dig dnssec-failed.org @127.0.0.1 -p 5335
+echo "=== 6. Memeriksa konfigurasi dan menjalankan Unbound ==="
+unbound-checkconf
+systemctl restart unbound
+systemctl enable unbound
+systemctl status unbound --no-pager
 
+echo "=== 7. Memeriksa status port Unbound ==="
+netstat -tlpn | grep unbound || netstat -anput | grep $UNBOUND_PORT
 
-echo "Instalasi selesai!"
+echo "=== 8. Menguji validasi DNSSEC Unbound pada Port $UNBOUND_PORT ==="
+echo "-> Tes 1: Domain Valid (Harus berstatus NOERROR dan memiliki flag 'ad')"
+dig sigok.verteiltesysteme.net @127.0.0.1 -p $UNBOUND_PORT
+
+echo "-> Tes 2: Domain DNSSEC Rusak (Harus berstatus SERVFAIL)"
+dig sigfail.verteiltesysteme.net @127.0.0.1 -p $UNBOUND_PORT
+dig dnssec-failed.org @127.0.0.1 -p $UNBOUND_PORT
+
+echo "=========================================================="
+echo "Instalasi Unbound selesai dan aktif di 127.0.0.1:$UNBOUND_PORT!"
+echo "Silakan masukkan 127.0.0.1:$UNBOUND_PORT ke Upstream DNS AdGuard Home."
+echo "=========================================================="
