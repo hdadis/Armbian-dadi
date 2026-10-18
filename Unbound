@@ -14,8 +14,6 @@ apt update
 apt install unbound unbound-anchor dnsutils net-tools tcpdump wget ca-certificates -y
 
 echo "=== 2. Mengunduh script Auto-Update dari GitHub Anda ==="
-wget -q -O /etc/systemd/system/apt-auto-update.service https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound4
-wget -q -O /usr/local/sbin/apt-auto-update.sh https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Unbound5
 
 chmod +x /usr/local/sbin/apt-auto-update.sh
 systemctl daemon-reload
