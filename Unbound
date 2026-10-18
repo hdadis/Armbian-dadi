@@ -83,6 +83,8 @@ echo "=== 6. Verifikasi Sistem DNS ==="
 netstat -tlupn | grep -E "53|AdGuard" || true
 dig google.com @127.0.0.1 -p 5335 +short
 
+dig test.opendns.com @127.0.0.1 -p 5335 +short
+
 echo "=========================================================="
 echo "Instalasi Selesai dan Bersih!"
 echo "- Unbound berjalan di: 127.0.0.1:5335 (Enkripsi Quad9 DoT)[cite: 4, 5]"
