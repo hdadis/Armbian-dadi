@@ -11,14 +11,15 @@ fi
 echo "Mengatur IP Static pada koneksi: $CON_NAME"
 
 # Terapkan konfigurasi IP Static dan DNS
-sudo nmcli connection modify "$CON_NAME" \
+sudo nmcli connection modify "Wired connection 1" \
   ipv4.method manual \
   ipv4.addresses 192.168.18.2/24 \
   ipv4.gateway 192.168.18.1 \
-  ipv4.dns "192.168.18.2" \
+  ipv4.dns "8.8.8.8,0.0.0.0" \
   ipv4.ignore-auto-dns yes
 
-# Reload koneksi (cukup 'up' agar lebih aman untuk SSH)
 sudo nmcli connection down "Wired connection 1" && sudo nmcli connection up "Wired connection 1"
+
+# Reload koneksi (cukup 'up' agar lebih aman untuk SSH)
 sudo nmcli connection up "$CON_NAME"
 nmcli dev show | grep -E 'IP4.ADDRESS|IP4.GATEWAY|IP4.DNS' && ping -c 3 raw.githubusercontent.com
