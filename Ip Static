@@ -1,7 +1,22 @@
-sudo nmcli connection modify "Wired connection 1" \
+#!/bin/bash
+
+# Deteksi otomatis nama koneksi Ethernet yang sedang aktif
+CON_NAME=$(nmcli -t -f NAME,TYPE connection show --active | grep ethernet | head -n1 | cut -d: -f1)
+
+# Jika tidak terdeteksi, gunakan default "Wired connection 1"
+if [ -z "$CON_NAME" ]; then
+    CON_NAME="Wired connection 1"
+fi
+
+echo "Mengatur IP Static pada koneksi: $CON_NAME"
+
+# Terapkan konfigurasi IP Static dan DNS
+sudo nmcli connection modify "$CON_NAME" \
   ipv4.method manual \
   ipv4.addresses 192.168.18.2/24 \
   ipv4.gateway 192.168.18.1 \
   ipv4.dns "127.0.0.1,8.8.8.8" \
   ipv4.ignore-auto-dns yes
-sudo nmcli connection down "Wired connection 1" && sudo nmcli connection up "Wired connection 1"
+
+# Reload koneksi (cukup 'up' agar lebih aman untuk SSH)
+sudo nmcli connection up "$CON_NAME"
