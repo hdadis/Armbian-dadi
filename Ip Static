@@ -2,6 +2,6 @@ sudo nmcli connection modify "Wired connection 1" \
   ipv4.method manual \
   ipv4.addresses 192.168.18.2/24 \
   ipv4.gateway 192.168.18.1 \
-  ipv4.dns "127.0.0.1" \
+  ipv4.dns "127.0.0.1,8.8.8.8" \
   ipv4.ignore-auto-dns yes
 sudo nmcli connection down "Wired connection 1" && sudo nmcli connection up "Wired connection 1"
