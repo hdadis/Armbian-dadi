@@ -20,3 +20,4 @@ sudo nmcli connection modify "$CON_NAME" \
 
 # Reload koneksi (cukup 'up' agar lebih aman untuk SSH)
 sudo nmcli connection up "$CON_NAME"
+nmcli dev show | grep -E 'IP4.ADDRESS|IP4.GATEWAY|IP4.DNS' && ping -c 3 raw.githubusercontent.com
