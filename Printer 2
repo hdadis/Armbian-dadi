@@ -9,7 +9,6 @@ fi
 
 echo "Menambahkan repositori Canon/SANE..."
 add-apt-repository ppa:thierry-f/fork-michael-gruz -y
-apt-get update
 
 echo "Menginstal seluruh paket yang dibutuhkan sekaligus..."
 # Catatan: Hapus simple-scan & xsane jika ini adalah server tanpa tampilan desktop (GUI)
