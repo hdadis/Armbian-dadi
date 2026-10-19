@@ -19,5 +19,6 @@ sudo nmcli connection modify "$CON_NAME" \
   ipv4.ignore-auto-dns yes
 
 # Reload koneksi (cukup 'up' agar lebih aman untuk SSH)
+sudo nmcli connection down "Wired connection 1" && sudo nmcli connection up "Wired connection 1"
 sudo nmcli connection up "$CON_NAME"
 nmcli dev show | grep -E 'IP4.ADDRESS|IP4.GATEWAY|IP4.DNS' && ping -c 3 raw.githubusercontent.com
