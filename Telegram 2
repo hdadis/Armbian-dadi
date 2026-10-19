@@ -9,7 +9,7 @@ sudo python3 -m venv /root/armbian-bot/venv
 sudo /root/armbian-bot/venv/bin/pip install pyTelegramBotAPI requests psutil
 
 # 4. Buat file bot.py lengkap
-sudo wget -O /root/armbian-bot/bot.py https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Telegram
+sudo wget -O /root/armbian-bot/bot.py https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Telegram%202
 
 # 5. Buat file armbianbot.service lengkap
 sudo bash -c 'cat << "EOF" > /etc/systemd/system/armbianbot.service
