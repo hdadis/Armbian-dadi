@@ -1,0 +1,70 @@
+#!/bin/bash
+set -e # Hentikan script jika ada error fatal
+
+# 1. Pastikan script dijalankan sebagai root
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "Menambahkan repositori Canon/SANE..."
+add-apt-repository ppa:thierry-f/fork-michael-gruz -y
+apt-get update
+
+echo "Menginstal seluruh paket yang dibutuhkan sekaligus..."
+# Catatan: Hapus simple-scan & xsane jika ini adalah server tanpa tampilan desktop (GUI)
+apt-get install -y \
+  cups \
+  printer-driver-gutenprint \
+  hplip \
+  printer-driver-foo2zjs \
+  printer-driver-cnijfilter-mg4200 \
+  cnijfilter2 \
+  scangearmp2 \
+  sane \
+  sane-utils \
+  sane-backends \
+  sane-frontends \
+  simple-scan \
+  xsane \
+  p910nd \
+  avahi-daemon \
+  nmap \
+  netcat-openbsd \
+  wget
+
+echo "Mengatur pengguna dan grup lpadmin..."
+# Buat user cupsadmin jika belum ada
+id -u cupsadmin &>/dev/null || useradd -g lpadmin -m cupsadmin
+usermod -a -G lpadmin dadi || echo "User dadi belum ada, melewati..."
+
+echo "Silakan masukkan password untuk cupsadmin:"
+passwd cupsadmin
+echo "Silakan masukkan password untuk dadi:"
+passwd dadi
+
+echo "Mengunduh file konfigurasi dan layanan..."
+wget -q -O /etc/default/saned https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Saned
+wget -q -O /usr/local/bin/jetdirect.sh https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Jetdirect
+wget -q -O /etc/systemd/system/jetdirect.service https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Jetdirect_Service
+wget -q -O /etc/default/p910nd https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/p910nd
+
+chmod +x /usr/local/bin/jetdirect.sh
+
+echo "Mengonfigurasi SANE (Scanner)..."
+# Menghapus tanda '#' agar IP aktif (uncomment) atau menambahkan subnet ke daftar izin
+if ! grep -q "^192.168.18.0/29" /etc/sane.d/saned.conf; then
+  echo "192.168.18.0/29" >> /etc/sane.d/saned.conf
+fi
+
+echo "Mengaktifkan layanan CUPS, Avahi, dan Jetdirect..."
+systemctl daemon-reload
+systemctl enable --now avahi-daemon
+systemctl enable --now cups
+cupsctl --remote-any
+systemctl restart cups
+
+# Mengaktifkan jetdirect (setelah file berhasil diunduh di atas)
+systemctl enable --now jetdirect
+
+echo "Instalasi selesai!"
