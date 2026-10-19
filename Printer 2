@@ -11,6 +11,7 @@ apt-get update
 
 echo "2. Menginstal CUPS dan komponen inti Print Server..."
 apt-get install -y cups cups-client printer-driver-gutenprint hplip printer-driver-foo2zjs p910nd avahi-daemon wget netcat-openbsd nmap
+apt-get install -y cupsctl --remote-any && systemctl restart cups
 
 echo "3. Menginstal SANE (Scanner Server)..."
 apt-get install -y sane sane-utils sane-backends
