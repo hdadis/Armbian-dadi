@@ -16,7 +16,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs
 yes | bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/MOCP)" -y
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/432%20Hz)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/432%20Hz%20-%201)"
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Printer)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Printer%202)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Shinobi)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Fix_Shinobi)"
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/n8n-SQL%20(if%20with%20Shinobi))"
