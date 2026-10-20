@@ -43,7 +43,7 @@ curl -sSL --retry 2 --connect-timeout 15 --max-time 60 "https://raw.githubuserco
 
 if [ -s "$TMP_RAW" ] && [ "$(wc -l < "$TMP_RAW")" -gt 10000 ]; then
   # Membuang komentar, baris kosong, dan mengabaikan aturan @@ (allowlist liar) dari list luar
-  grep -vE '^[[:space:]]*(!|#|\$|@@)' "$TMP_RAW" | tr -d '\r' | nice -n 19 sort -S 50M -u > "$TMP_CLEAN"
+  grep -vE '^[[:space:]]*(!|#|\$|@@)' "$TMP_RAW" \vert{} tr -d '\r' \vert{} nice -n 19 sort -S 50M -u > "$TMP_CLEAN"
   rm -f "$TMP_RAW"
 
   # Menyuntikkan Whitelist resmi Microsoft, Xbox, & Push Notification yang diizinkan lolos
@@ -100,31 +100,11 @@ fi
 systemctl stop AdGuardHome
 cp "$YAML_FILE" "${YAML_FILE}.bak"
 
-echo "=== [6/7] Menyuntikkan Upstream, Bootstrap & Local Filter ke YAML ==="
+echo "=== [6/7] Menyuntikkan Upstream Unbound, Sync Setting & Local Filter ke YAML ==="
 python3 - << 'PYEOF'
 import re
 p = "/opt/AdGuardHome/AdGuardHome.yaml"
 c = open(p, "r", encoding="utf-8").read()
 
-c = re.sub(r"(?m)^(\s*filters_update_interval:\s*)\d+", r"\g<1>72", c)
-c = re.sub(r"(?m)^  upstream_dns:\n(?:    - .*\n|  - .*\n)+", "  upstream_dns:\n    - https://doh.opendns.com/dns-query\n", c)
-c = re.sub(r"(?m)^  bootstrap_dns:\n(?:    - .*\n|  - .*\n)+", "  bootstrap_dns:\n    - 94.140.15.15\n", c)
-
-nf = "filters:\n  - enabled: true\n    url: http://127.0.0.1:8181/gabungan_stabil.txt\n    name: Gabungan 19 List Stabil (Lokal)\n    id: 1791342653\n"
-c = re.sub(r"(?m)^filters:\n(?:  .*\n|\n)*?(?=^\w+:)", nf, c)
-
-wl = ["account.microsoft.com","login.live.com","login.microsoftonline.com","acctcdn.msauth.net","acctcdn.msftauth.net","logincdn.msauth.net","aadcdn.msauth.net","aadcdn.msftauth.net","amcdn.msftauth.net","graph.microsoft.com","profile.microsoft.com","account.live.com","signup.live.com","sfx.ms","onedrive.live.com","clientconfig.passport.net","device.auth.xboxlive.com","user.auth.xboxlive.com","xsts.auth.xboxlive.com"]
-nr = "user_rules:\n" + "".join([f"  - '@@||{d}^$important'\n" for d in wl])
-c = re.sub(r"(?m)^user_rules:\n(?:  .*\n|\n)*?(?=^\w+:)", nr, c)
-
-open(p, "w", encoding="utf-8").write(c)
-PYEOF
-
-echo "=== [7/7] Memasang Jadwal Auto-Update (Tiap 3 Hari Jam 03:00 Pagi) ==="
-CRON_JOB="0 3 */3 * * /opt/AdGuardHome/update-blocklists.sh >/dev/null 2>&1"
-(crontab -l 2>/dev/null | grep -Fv "update-blocklists.sh"; echo "$CRON_JOB") | crontab -
-
-systemctl start AdGuardHome
-echo "=========================================================="
-echo "Selesai! Script telah diperbarui dengan proteksi skor 95%-97%."
-echo "=========================================================="
+# 1. Interval Update & Upstream/Bootstrap Unbound
+c = re.sub(r"(?m)^(\s*filters_update_interval:\s*)\d+", r"\g<1
