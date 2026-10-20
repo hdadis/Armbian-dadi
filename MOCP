@@ -1,79 +1,88 @@
 #!/bin/bash
 
 if [ "$EUID" -ne 0 ]; then
-  echo "Harap jalankan script ini sebagai root atau dengan sudo"
+  echo "Harap jalankan script ini dengan sudo: sudo ./set_432hz.sh"
   exit 1
 fi
 
-echo "1. Menginstal MOC, plugin codec, dan ALSA murni..."
+echo "1. Menginstal plugin LADSPA Pitch Scaler (Sangat ringan, hanya ~200KB)..."
 apt-get update
-apt-get install -y --no-install-recommends moc moc-ffmpeg-plugin alsa-utils alsa-ucm-conf
+apt-get install -y swh-plugins ladspa-sdk
 
-echo "2. Membuat jembatan ALSA & Mixer Virtual (Master) untuk S905X-P212..."
-cat << 'EOF' > /etc/asound.conf
-pcm.!default {
-    type plug
-    slave.pcm "softvol"
-}
+# Tentukan target user (dadi)
+TARGET_USER="dadi"
+if ! id "$TARGET_USER" &>/dev/null; then
+  TARGET_USER=${SUDO_USER:-root}
+fi
+USER_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+USER_UID=$(id -u "$TARGET_USER")
 
-pcm.softvol {
-    type softvol
-    slave {
-        pcm "plughw:0,0"
+echo "2. Memasang konfigurasi Filter 432Hz (Ratio: 0.98181818) untuk user $TARGET_USER..."
+
+# A. Buat konfigurasi untuk PipeWire (Filter-Chain 432Hz)
+PW_CONF_DIR="$USER_HOME/.config/pipewire/pipewire.conf.d"
+mkdir -p "$PW_CONF_DIR"
+
+cat << 'EOF' > "$PW_CONF_DIR/99-432hz.conf"
+context.modules = [
+    {   name = libpipewire-module-filter-chain
+        args = {
+            node.description = "Output 432Hz Native"
+            media.name       = "Output 432Hz Native"
+            filter.graph = {
+                nodes = [
+                    {
+                        type   = ladspa
+                        name   = pitch_432hz
+                        plugin = pitch_scale_1193
+                        label  = pitchScale
+                        control = {
+                            "Pitch co-efficient" = 0.98181818
+                        }
+                    }
+                ]
+            }
+            audio.channels = 2
+            audio.position = [ FL FR ]
+            capture.props = {
+                node.name   = "effect_input.432hz"
+                media.class = Audio/Sink
+            }
+            playback.props = {
+                node.name   = "effect_output.432hz"
+                node.passive = true
+            }
+        }
     }
-    control {
-        name "Master"
-        card 0
-    }
-}
-
-ctl.!default {
-    type hw
-    card 0
-}
+]
 EOF
+chown -R "$TARGET_USER":"$TARGET_USER" "$USER_HOME/.config"
 
-# Pancing ALSA selama 1 detik agar kontrol volume 'Master' terdaftar di kernel
-speaker-test -D default -c 2 -t wav -l 1 >/dev/null 2>&1 || true
-
-# Fungsi untuk membuat konfigurasi MOC di direktori target
-buat_config_moc() {
-  local TARGET_USER=$1
-  local TARGET_HOME=$2
-  local MOC_DIR="$TARGET_HOME/.moc"
-
-  mkdir -p "$MOC_DIR"
-  cat <<EOF > "$MOC_DIR/config"
-SoundDriver = ALSA
-AlsaDevice = default
-ALSAMixer1 = Master
-ALSAMixer2 = Master
-SavePlaylist = yes
-Softmixer_SaveState = yes
+# B. Buat skrip pengaktif otomatis untuk PulseAudio / PipeWire-Pulse
+cat << 'EOF' > /usr/local/bin/aktifkan-432hz
+#!/bin/bash
+# Cek apakah modul 432Hz sudah aktif
+if pactl list short sinks | grep -q "432hz"; then
+  SINK_NAME=$(pactl list short sinks | awk '/432hz/ {print $2}' | head -n 1)
+  pactl set-default-sink "$SINK_NAME"
+  echo "[+] Output 432Hz sudah aktif dan disetel sebagai utama ($SINK_NAME)."
+else
+  # Jika berjalan di PulseAudio murni, muat modul LADSPA secara langsung
+  MASTER_SINK=$(pactl get-default-sink)
+  pactl load-module module-ladspa-sink sink_name=output_432hz master="$MASTER_SINK" plugin=pitch_scale_1193 label=pitchScale control=0.98181818 2>/dev/null || true
+  pactl set-default-sink output_432hz 2>/dev/null || true
+  echo "[+] Modul 432Hz berhasil diaktifkan!"
+fi
 EOF
-  chown -R "$TARGET_USER":"$TARGET_USER" "$MOC_DIR"
-  chmod 600 "$MOC_DIR/config"
-}
+chmod +x /usr/local/bin/aktifkan-432hz
 
-echo "3. Mengatur konfigurasi MOC untuk mode ROOT (/root/.moc)..."
-buat_config_moc "root" "/root"
-usermod -aG audio root
-
-echo "4. Mengatur konfigurasi MOC untuk semua user di /home (termasuk dadi)..."
-for USER_DIR in /home/*; do
-  if [ -d "$USER_DIR" ]; then
-    U_NAME=$(basename "$USER_DIR")
-    if id "$U_NAME" &>/dev/null; then
-      echo "   -> Menyiapkan konfigurasi MOC untuk user: $U_NAME"
-      buat_config_moc "$U_NAME" "$USER_DIR"
-      usermod -aG audio "$U_NAME"
-    fi
-  fi
-done
-
-echo "5. Memulai ulang server MOC..."
-killall -9 mocp 2>/dev/null || true
-mocp -S
+echo "3. Memulai ulang layanan audio dan mengaktifkan jalur 432Hz..."
+sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$USER_UID" systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || true
+sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$USER_UID" pulseaudio -k 2>/dev/null || true
+sleep 2
+sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$USER_UID" /usr/local/bin/aktifkan-432hz
 
 echo "========================================================"
-echo "Fresh Install Selesai! MOC siap dijalankan di mode root maupun user."
+echo "Selesai! Semua suara dari MOCP kini berjalan di frekuensi 432Hz."
+echo "Catatan: Jika ingin kembali ke 440Hz standar, cukup hapus file:"
+echo "rm -f $PW_CONF_DIR/99-432hz.conf && systemctl --user restart pipewire"
