@@ -42,11 +42,9 @@ done
 curl -sSL --retry 2 --connect-timeout 15 --max-time 60 "https://raw.githubusercontent.com/hdadis/adblock-mix/refs/heads/main/ABP%20Compiled%201.txt" >> "$TMP_RAW"
 
 if [ -s "$TMP_RAW" ] && [ "$(wc -l < "$TMP_RAW")" -gt 10000 ]; then
-  # Membuang komentar, baris kosong, dan mengabaikan aturan @@ (allowlist liar) dari list luar
-  grep -vE '^[[:space:]]*(!|#|\$|@@)' "$TMP_RAW" \vert{} tr -d '\r' \vert{} nice -n 19 sort -S 50M -u > "$TMP_CLEAN"
+  grep -vE '^[[:space:]]*(!|#|\$|@@)' "$TMP_RAW" | tr -d '\r' | nice -n 19 sort -S 50M -u > "$TMP_CLEAN"
   rm -f "$TMP_RAW"
 
-  # Menyuntikkan Whitelist resmi Microsoft, Xbox, & Push Notification yang diizinkan lolos
   for dom in account.microsoft.com login.live.com login.microsoftonline.com acctcdn.msauth.net acctcdn.msftauth.net logincdn.msauth.net aadcdn.msauth.net aadcdn.msftauth.net amcdn.msftauth.net graph.microsoft.com profile.microsoft.com account.live.com signup.live.com sfx.ms onedrive.live.com storage.live.com clientconfig.passport.net device.auth.xboxlive.com user.auth.xboxlive.com xsts.auth.xboxlive.com mtalk.google.com fcm.googleapis.com; do
     echo "@@||${dom}^\$important" >> "$TMP_CLEAN"
   done
@@ -137,3 +135,12 @@ c = re.sub(r"(?m)^user_rules:\s*(?:\[\]\n?|\n(?:  .*\n|\n)*?)(?=^\w+:|\Z)", nr, 
 with open(p, "w", encoding="utf-8") as f:
     f.write(c)
 PYEOF
+
+echo "=== [7/7] Memasang Jadwal Auto-Update (Tiap 3 Hari Jam 03:00 Pagi) ==="
+CRON_JOB="0 3 */3 * * /opt/AdGuardHome/update-blocklists.sh >/dev/null 2>&1"
+(crontab -l 2>/dev/null | grep -Fv "update-blocklists.sh"; echo "$CRON_JOB") | crontab -
+
+systemctl start AdGuardHome
+echo "=========================================================="
+echo "Selesai! Script lengkap telah diperbarui dan siap digunakan."
+echo "=========================================================="
