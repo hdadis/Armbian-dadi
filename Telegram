@@ -1,4 +1,5 @@
 # 1. Update paket & install dependencies pendukung
+sudo apt-get update
 sudo apt install python3 python3-pip python3-venv arp-scan -y
 sudo apt install python3.10-venv
 
