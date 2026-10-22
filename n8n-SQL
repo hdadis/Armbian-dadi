@@ -96,6 +96,10 @@ EXECUTIONS_DATA_PRUNE=true
 N8N_DEFAULT_BINARY_DATA_MODE=filesystem
 N8N_DIAGNOSTICS_ENABLED=false
 N8N_VERSION_NOTIFICATIONS_ENABLED=false
+
+# Timezone
+GENERIC_TIMEZONE=Asia/Jakarta
+TZ=Asia/Jakarta
 EOT
 
 echo "=== 7. Menginstal Cloudflared ==="
