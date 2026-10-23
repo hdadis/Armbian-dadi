@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+echo "[+] Menginstal paket driver NTFS..."
+apt-get install -y ntfs-3g ntfsprogs
+
+MOUNT_POINT="/mnt/External"
+mkdir -p "$MOUNT_POINT"
+
+# Lepas mount terlebih dahulu sebelum menjalankan ntfsfix
+umount /dev/sda1 2>/dev/null
+umount "$MOUNT_POINT" 2>/dev/null
+
+if [ -b /dev/sda1 ]; then
+  echo "[+] Memperbaiki struktur NTFS di /dev/sda1..."
+  ntfsfix /dev/sda1
+fi
+
+DRIVE_CONF="/etc/fstab"
+cp "$DRIVE_CONF" "$DRIVE_CONF.bak"
+
+# Bersihkan baris /mnt/External yang lama (termasuk baris /dev/mmcblk2 yang bikin error)
+sed -i "\|$MOUNT_POINT|d" "$DRIVE_CONF"
+
+# Ambil UUID dari USB yang sedang tercolok saat ini
+CURRENT_UUID=$(blkid -s UUID -o value /dev/sda1)
+
+echo "[+] Menulis daftar konfigurasi DRIVE ke FSTAB..."
+cat <<EOT >> "$DRIVE_CONF"
+UUID=EAFE72BDFE72819D /mnt/External    ntfs-3g   defaults,nofail,noatime  0  0
+UUID=6CFC6F3FFC6F02A6 /mnt/External    ntfs-3g   defaults,nofail,noatime  0  0
+UUID=5E5E85795E854AAB /mnt/External    ntfs-3g   defaults,nofail,noatime  0  0
+UUID=1E4C64934C64678B /mnt/External    ntfs-3g   defaults,nofail,noatime  0  0
+UUID=104A4F424A4F23B6 /mnt/External    ntfs-3g   defaults,nofail,noatime  0  0
+UUID=CEC6AE70C6AE590B /mnt/External    ntfs-3g   defaults,nofail,noatime  0  0
+EOT
+
+# Agar systemd tidak bingung karena ada 6 baris ke folder yang sama,
+# otomatis beri tanda '#' pada UUID yang sedang TIDAK tercolok, dan aktifkan yang sedang tercolok:
+if [ -n "$CURRENT_UUID" ]; then
+  sed -i "s/^UUID=/#UUID=/g" "$DRIVE_CONF"
+  sed -i "s/^#UUID=$CURRENT_UUID/UUID=$CURRENT_UUID/g" "$DRIVE_CONF"
+  # Pastikan UUID root system (ext4) tidak ikut terkena tanda '#'
+  sed -i "s/^#UUID=e8dedd9f/UUID=e8dedd9f/g" "$DRIVE_CONF"
+fi
+
+# Muat ulang konfigurasi dan mount USB
+systemctl daemon-reload
+mount -a
+
+echo "Instalasi selesai!"
+df -h "$MOUNT_POINT"
