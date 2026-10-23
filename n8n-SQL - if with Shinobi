@@ -9,18 +9,18 @@ fi
 # Hentikan script jika terjadi error pada perintah penting
 set -e
 
-# Fungsi otomatis untuk mengembalikan ZRAM ke default Armbian (50%) & menghapus sisa swapfile jika ada
+# Fungsi otomatis untuk mengatur ZRAM ke 100% (optimal untuk beban ganda) & menghapus temp
 restore_default_swap() {
-  echo "=== Mengembalikan konfigurasi Swap (ZRAM) ke default Armbian ==="
+  echo "=== Mengatur konfigurasi ZRAM ke level optimal (100%) & membersihkan temp ==="
   swapoff /swapfile_temp 2>/dev/null || true
-  rm -f /swapfile_temp
+  rm -rf /swapfile_temp /var/tmp/npm_build_tmp
   if [ -f /etc/default/armbian-zram-config ]; then
-    sed -i 's/PERCENT=.*/PERCENT=50/g' /etc/default/armbian-zram-config
+    sed -i 's/PERCENT=.*/PERCENT=100/g' /etc/default/armbian-zram-config
     systemctl restart armbian-zram-config 2>/dev/null || true
   fi
 }
 
-# Pasang trap: Jika script selesai ATAU terhenti karena error, swap otomatis kembali ke default
+# Pasang trap: Jika script selesai ATAU terhenti karena error, langsung jalankan pembersihan
 trap restore_default_swap EXIT
 
 echo "=== 1. Menginstal dependensi dasar sistem ==="
@@ -29,24 +29,21 @@ apt-get install -y curl build-essential git python3 python3-pip software-propert
 apt-get clean
 
 echo "=== 2. Memeriksa Node.js & Mengatur NPM v10 (Anti Error EALLOWREMOTE) ==="
-# Jika Node.js belum terinstal (misal belum instal Shinobi), instal Node.js v20 LTS
 if ! command -v node &> /dev/null; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
   apt-get install -y nodejs
   apt-get clean
 fi
 
-# Pastikan PM2 terinstal dan paksa npm ke versi 10 agar paket xlsx n8n tidak diblokir di Node v22
 npm install -g pm2 npm@10 --no-audit --no-fund
 hash -r
 
-# Verifikasi versi Node.js dan NPM
 node -v
 npm -v
 
 echo "=== 3. Menyiapkan Ruang eMMC & ZRAM Swap untuk HG680P RAM 1GB ==="
-# Jika Shinobi (camera) sedang berjalan di PM2, hentikan sementara agar RAM 1GB fokus untuk instalasi n8n
-pm2 stop camera 2>/dev/null || true
+# Hentikan semua proses PM2 sementara (camera & cron Shinobi) agar RAM 1GB fokus penuh
+pm2 stop all 2>/dev/null || true
 
 # Bersihkan sisa sampah instalasi sebelumnya agar ruang eMMC lega
 swapoff /swapfile_temp 2>/dev/null || true
@@ -58,7 +55,7 @@ apt-get autoremove -y
 npm cache clean --force
 rm -rf /root/.npm /root/.node-gyp /tmp/* /var/tmp/*
 
-# Naikkan ZRAM sementara ke 150% (Swap di RAM tanpa memakan kapasitas eMMC 8GB!)
+# Naikkan ZRAM sementara ke 150% selama proses instalasi
 if [ -f /etc/default/armbian-zram-config ]; then
   sed -i 's/PERCENT=.*/PERCENT=150/g' /etc/default/armbian-zram-config
   systemctl restart armbian-zram-config 2>/dev/null || true
@@ -66,12 +63,13 @@ fi
 free -h
 df -h /
 
-echo "=== 4. Menginstal n8n v1.94.0 via npm ==="
-NODE_OPTIONS="--max-old-space-size=700" npm install -g n8n@1.94.0 --maxsockets=1 --omit=dev --no-audit --no-fund --verbose
+echo "=== 4. Menginstal n8n v1.94.0 via npm (Menggunakan Temp eMMC agar RAM tidak penuh) ==="
+mkdir -p /var/tmp/npm_build_tmp
+TMPDIR=/var/tmp/npm_build_tmp NODE_OPTIONS="--max-old-space-size=650" npm install -g n8n@1.94.0 --maxsockets=1 --omit=dev --no-audit --no-fund --verbose
 
-echo "=== 5. Mengembalikan Swap ke Default Armbian & Membersihkan Cache NPM ==="
+echo "=== 5. Mengoptimalkan Swap & Membersihkan Cache Instalasi ==="
 npm cache clean --force
-rm -rf /root/.npm /root/.node-gyp /tmp/*
+rm -rf /root/.npm /root/.node-gyp /tmp/* /var/tmp/npm_build_tmp
 restore_default_swap
 
 echo "=== 6. Membuat File Konfigurasi .env & Folder Downloads ==="
@@ -86,11 +84,9 @@ N8N_LISTEN_ADDRESS=0.0.0.0
 N8N_PORT=5678
 
 # --- URL Config ---
-# WEBHOOK_URL digunakan agar webhook penerima data mengarah ke domain publik
 WEBHOOK_URL=https://ai.balai.my.id/
 
 # --- Cookie Security ---
-# Set ke false agar IP lokal (HTTP) tidak terblokir warning "secure cookie"
 N8N_SECURE_COOKIE=false
 
 # --- Environment Variable Custom ---
@@ -109,43 +105,41 @@ EXECUTIONS_DATA_PRUNE=true
 N8N_DEFAULT_BINARY_DATA_MODE=filesystem
 N8N_DIAGNOSTICS_ENABLED=false
 N8N_VERSION_NOTIFICATIONS_ENABLED=false
+N8N_HIRE_BANNER_ENABLED=false
+N8N_TEMPLATES_ENABLED=false
 EOT
 
 echo "=== 7. Menginstal Cloudflared ==="
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
 
-# Hapus service lama jika ada sebelum install baru
 cloudflared service uninstall 2>/dev/null || true
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
-echo "=== 8. Menjalankan Shinobi (Jika Ada) & n8n secara Bersamaan di PM2 ==="
-# Nyalakan kembali Shinobi (camera) jika sebelumnya terinstal
+echo "=== 8. Menjalankan Shinobi & n8n secara Bersamaan di PM2 ==="
+# Hapus pm2-logrotate jika ada (menghemat ~40MB RAM, digantikan oleh cron di tahap 9)
+pm2 uninstall pm2-logrotate 2>/dev/null || true
+
+# Nyalakan kembali proses Shinobi (camera & cron) jika sebelumnya terinstal
 pm2 start camera 2>/dev/null || true
+pm2 start cron 2>/dev/null || true
 
 # Hapus instance n8n lama jika ada
 pm2 delete n8n 2>/dev/null || true
 
-# Muat isi file .env ke environment sistem agar 100% terbaca oleh PM2 dan n8n
+# Muat isi file .env ke environment sistem
 set -a
 source /root/n8n/.env
 set +a
 
-# Jalankan n8n dengan batas memori 450MB (aman berbagi RAM 1GB dengan Shinobi)
+# Jalankan n8n dengan batas memori 420MB (menyisakan ruang aman untuk Shinobi & OS)
 N8N_BIN=$(which n8n)
-pm2 start "$N8N_BIN" --name "n8n" --max-memory-restart 450M --node-args="--max-old-space-size=450" --update-env
-
-# Pasang pembatas ukuran log PM2 (Maksimal 10MB per file, simpan 2 file)
-pm2 install pm2-logrotate 2>/dev/null || true
-pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:retain 2
-pm2 set pm2-logrotate:compress true
+pm2 start "$N8N_BIN" --name "n8n" --max-memory-restart 420M --node-args="--max-old-space-size=400" --update-env
 
 # Simpan konfigurasi PM2 agar Shinobi + n8n bertahan saat reboot
 pm2 save
 env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root || true
 
-echo "=== 9. Mengatur Pembersih Otomatis (Downloads: Maks 5 Jam / 15 File & Clear Cache Aman) ==="
-# A. Buat script pembatas folder downloads (Maksimal 5 jam & Maksimal 15 file)
+echo "=== 9. Mengatur Pembersih Otomatis (Downloads, BinaryData & Log PM2) ==="
 cat << 'EOF' > /usr/local/bin/limit-downloads
 #!/bin/bash
 TARGET_DIR="/root/n8n/downloads"
@@ -154,24 +148,24 @@ if [ -d "$TARGET_DIR" ]; then
   # 1. Hapus file di folder downloads yang umurnya lebih dari 5 jam (300 menit)
   find "$TARGET_DIR" -type f -mmin +300 -delete
 
-  # 2. Jika jumlah file masih lebih dari 15, hapus file yang paling tua hingga tersisa 15 file terbaru
-  ls -1t "$TARGET_DIR" 2>/dev/null | tail -n +16 | while IFS= read -r file; do
-    rm -f "$TARGET_DIR/$file"
-  done
+  # 2. Jika jumlah file masih lebih dari 15, hapus file paling tua hingga tersisa 15 file terbaru
+  find "$TARGET_DIR" -maxdepth 1 -type f -printf '%T@ %p\n' 2>/dev/null | sort -zr -n | tail -z -n +16 | cut -z -d' ' -f2- | xargs -0 -r rm -f
 fi
 
-# 3. Hapus juga file binaryData internal n8n yang umurnya lebih dari 5 jam (300 menit)
+# 3. Hapus file binaryData internal n8n yang umurnya lebih dari 5 jam (300 menit)
 find /root/.n8n/binaryData -type f -mmin +300 -delete 2>/dev/null || true
+
+# 4. Pangkas log PM2 jika ukurannya melebihi 5MB (menggantikan pm2-logrotate tanpa makan RAM)
+find /root/.pm2/logs -type f -name "*.log" -size +5M -exec truncate -s 0 {} + 2>/dev/null || true
 EOF
 chmod +x /usr/local/bin/limit-downloads
 
-# Jadwalkan pengecekan folder downloads setiap 15 menit sekali via Cron
 echo "*/15 * * * * root /usr/local/bin/limit-downloads" > /etc/cron.d/n8n-download-limiter
 chmod 644 /etc/cron.d/n8n-download-limiter
 systemctl enable cron 2>/dev/null || true
 systemctl restart cron 2>/dev/null || true
 
-# B. Buat perintah "clean-stb" untuk pembersihan menyeluruh (AMAN: Melindungi /root/.cache/n8n)
+# Buat perintah "clean-stb" untuk pembersihan menyeluruh
 cat << 'EOF' > /usr/local/bin/clean-stb
 #!/bin/bash
 echo "Menjalankan pembersihan cache sistem, log, downloads, dan melegakan RAM..."
@@ -192,7 +186,6 @@ free -h
 EOF
 chmod +x /usr/local/bin/clean-stb
 
-# Pasang clean-stb ke jadwal harian otomatis
 ln -sf /usr/local/bin/clean-stb /etc/cron.daily/n8n-cleaner
 
 echo "=== 10. Membersihkan Seluruh Cache Pasca-Instalasi ==="
