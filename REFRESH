@@ -2,7 +2,7 @@ sudo tee /root/cleanup.sh >/dev/null << 'EOF'
 #!/bin/bash
 
 # ==============================================================================
-# Script Pembersihan Menyeluruh, Auto-Cron & Refresh Nginx (Armbian STB HG680P)
+# Script Pembersihan Menyeluruh, Auto-Cron 5 Jam & Refresh Nginx (Armbian STB HG680P)
 # Terintegrasi: n8n Safe UI, Purge Compiler, MOCP Safe, AdGuard Clean, Nginx
 # ==============================================================================
 
@@ -12,10 +12,11 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 SCRIPT_PATH="/root/cleanup.sh"
-MAX_FILES=15
 MODE="${1:-full}"
 
 CLEAN_DIRS=(
+  "/root/n8n/downloads"
+  "/home/node/downloads"
   "/home/dadi/.n8n/binaryData"
   "/home/dadi/Downloads"
   "/var/www/n8n/downloads"
@@ -30,9 +31,18 @@ WEB_DIRS=(
 )
 
 clean_n8n_files() {
+  local FORCE_ALL="${1:-false}"
   for d in "${CLEAN_DIRS[@]}"; do
-    if [ -d "$d" ]; then
-      find "$d" -mindepth 1 -delete 2>/dev/null || true
+    # Lewati symlink agar tidak menghapus folder yang sama dua kali
+    if [ -d "$d" ] && [ ! -L "$d" ]; then
+      if [ "$FORCE_ALL" = "true" ]; then
+        # Mode manual (--all): Hapus semua file detik ini juga tanpa peduli umur file
+        find "$d" -mindepth 1 -delete 2>/dev/null || true
+      else
+        # Mode reguler (5 jam): Hapus file yang umurnya > 5 jam (300 menit) + subfolder kosong
+        find "$d" -type f -mmin +300 -delete 2>/dev/null || true
+        find "$d" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+      fi
     fi
   done
 }
@@ -62,29 +72,10 @@ refresh_nginx_web() {
 }
 
 # ------------------------------------------------------------------------------
-# MODE CEPAT 1 (Dipanggil lewat perintah 'refresh-web'): Hanya Refresh Nginx
+# MODE CEPAT (Dipanggil lewat perintah 'refresh-web'): Hanya Refresh Nginx
 # ------------------------------------------------------------------------------
 if [ "$MODE" = "--web-only" ]; then
   refresh_nginx_web
-  exit 0
-fi
-
-# ------------------------------------------------------------------------------
-# MODE CEPAT 2 (Dipanggil tiap 10 menit oleh Cron): Cek kuota maksimal 15 file
-# ------------------------------------------------------------------------------
-if [ "$MODE" = "--quota-only" ]; then
-  TOTAL_FILES=0
-  for d in "${CLEAN_DIRS[@]}"; do
-    if [ -d "$d" ]; then
-      COUNT=$(find "$d" -type f 2>/dev/null | wc -l)
-      TOTAL_FILES=$((TOTAL_FILES + COUNT))
-    fi
-  done
-
-  if [ "$TOTAL_FILES" -gt "$MAX_FILES" ]; then
-    clean_n8n_files
-    find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -mmin +10 -exec rm -rf {} + 2>/dev/null || true
-  fi
   exit 0
 fi
 
@@ -99,22 +90,29 @@ if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
   echo "[+] Menyalin script secara permanen ke $SCRIPT_PATH..."
 fi
 
+# Buat shortcut perintah 'refresh-web' dan 'clean-stb' agar bisa dipanggil dari mana saja
 cat << 'EOS' > /usr/local/bin/refresh-web
 #!/bin/bash
 sudo /bin/bash /root/cleanup.sh --web-only
 EOS
 chmod +x /usr/local/bin/refresh-web
 
-rm -f /etc/cron.d/n8n-cleaner /usr/local/bin/n8n-cleaner.sh /root/refresh.sh 2>/dev/null || true
+cat << 'EOS' > /usr/local/bin/clean-stb
+#!/bin/bash
+sudo /bin/bash /root/cleanup.sh "$@"
+EOS
+chmod +x /usr/local/bin/clean-stb
 
-# 1. Fitur Otomatisasi Cron (Setiap 5 jam & cek kuota 15 file tiap 10 menit)
-echo "[+] Memperbarui jadwal otomatis di Cron (Setiap 5 Jam & Kuota $MAX_FILES File)..."
+# Hapus file cron lama yang duplikat agar tidak bentrok
+rm -f /etc/cron.d/n8n-cleaner /etc/cron.d/n8n-download-limiter /etc/cron.daily/n8n-cleaner /usr/local/bin/n8n-cleaner.sh /usr/local/bin/limit-downloads /root/refresh.sh 2>/dev/null || true
+
+# 1. Fitur Otomatisasi Cron (Murni setiap 5 jam, TANPA batasan jumlah file)
+echo "[+] Memperbarui jadwal otomatis di Cron (Setiap 5 Jam, Tanpa Batas Jumlah File)..."
 (
   crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" || true
   echo "0 */5 * * * /bin/bash $SCRIPT_PATH >/dev/null 2>&1"
-  echo "*/10 * * * * /bin/bash $SCRIPT_PATH --quota-only >/dev/null 2>&1"
 ) | crontab -
-echo "[+] Berhasil! Pembersihan otomatis tiap 5 jam & penjaga kuota $MAX_FILES file aktif."
+echo "[+] Berhasil! Pembersihan otomatis tiap 5 jam telah aktif."
 
 echo "[+] Memulai pembersihan menyeluruh sistem Armbian..."
 echo "--------------------------------------------------"
@@ -122,107 +120,4 @@ echo "Kapasitas SEBELUM pembersihan:"
 df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
 echo "--------------------------------------------------"
 
-# 2. Pastikan Swap kembali ke ukuran ideal 1GB (1024MB) jika masih 1.5GB sisa instalasi
-if [ -f /swapfile ]; then
-  SWAP_MB=$(du -m /swapfile | cut -f1)
-  if [ "$SWAP_MB" -gt 1100 ]; then
-    echo "[+] Mengecilkan /swapfile dari ${SWAP_MB}MB kembali ke default 1024MB (1GB)..."
-    swapoff /swapfile 2>/dev/null || true
-    rm -f /swapfile
-    dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
-    chmod 600 /swapfile
-    mkswap /swapfile >/dev/null 2>&1
-    swapon /swapfile
-  fi
-fi
-
-# 3. Membersihkan semua file unduhan / binary tersimpan n8n
-echo "[+] Menghapus semua file unduhan & binary tersimpan n8n..."
-clean_n8n_files
-
-# 4. Hapus paket kompilator (build-essential ~200MB) HANYA jika n8n sudah terinstal
-if command -v n8n >/dev/null 2>&1; then
-  if dpkg -l | grep -q "^ii  build-essential"; then
-    echo "[+] n8n sudah terinstal! Menghapus build-essential (gcc/g++) untuk hemat ~200MB..."
-    apt-get remove --purge -y build-essential g++ gcc dpkg-dev >/dev/null 2>&1 || true
-  fi
-fi
-
-# 5. Membersihkan cache package APT, file .deb sisa, dan orphan packages
-echo "[+] Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
-apt-get autoremove --purge -y >/dev/null 2>&1 || true
-dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 || true
-apt-get autoclean -y >/dev/null 2>&1 || true
-apt-get clean -y >/dev/null 2>&1 || true
-rm -rf /var/lib/apt/lists/*
-
-# 6. Membersihkan cache NPM secara langsung
-echo "[+] Membersihkan cache NPM (root & semua user)..."
-rm -rf /root/.npm /home/*/.npm /root/.node-gyp /home/*/.node-gyp 2>/dev/null || true
-
-# 7. Memangkas log system (Systemd Journal & PostgreSQL log lama)
-echo "[+] Memangkas log systemd-journal & log sistem..."
-journalctl --vacuum-time=1d --vacuum-size=5M 2>/dev/null || true
-find /var/log -type f \( -name "*.gz" -o -name "*.1" -o -name "*.old" \) -delete 2>/dev/null || true
-truncate -s 0 /var/log/postgresql/*.log 2>/dev/null || true
-truncate -s 0 /var/log/nginx/*.log 2>/dev/null || true
-
-# 8. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP)
-echo "[+] Membersihkan file temporary (/tmp dan /var/tmp) tanpa memutus MOCP..."
-find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
-find /var/tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
-
-# 9. Membersihkan Query Log, Statistik, & Cache AdGuard Home secara Total (File-based)
-if systemctl is-active --quiet AdGuardHome; then
-  echo "[+] Membersihkan Query Log, Statistik, dan Cache AdGuard Home..."
-  systemctl stop AdGuardHome
-  rm -f /opt/AdGuardHome/data/querylog.json* 2>/dev/null || true
-  rm -f /opt/AdGuardHome/data/stats.db 2>/dev/null || true
-  rm -f /opt/AdGuardHome/data/cache.db 2>/dev/null || true
-  systemctl start AdGuardHome
-  echo "[+] Selesai! Statistik AdGuard Home telah di-reset ke 0."
-fi
-
-# 10. Membersihkan PM2 log (untuk root dan untuk user biasa seperti dadi)
-if command -v pm2 &> /dev/null; then
-  echo "[+] Membersihkan log PM2 (root & user n8n)..."
-  pm2 flush > /dev/null 2>&1 || true
-  for u in /home/*; do
-    USERNAME=$(basename "$u")
-    if [ -d "$u/.pm2" ]; then
-      su - "$USERNAME" -c "pm2 flush >/dev/null 2>&1" || true
-      rm -rf "$u/.pm2/logs/*" 2>/dev/null || true
-    fi
-  done
-fi
-
-# 11. Refresh Izin Akses Website & Reload Nginx
-refresh_nginx_web
-
-# 12. Membersihkan cache user lokal TANPA menghapus cache UI n8n (.cache/n8n)
-echo "[+] Membersihkan cache user lokal (aman untuk UI n8n)..."
-find /root/.cache -mindepth 1 -maxdepth 1 ! -name 'n8n' -exec rm -rf {} + 2>/dev/null || true
-for u in /home/*; do
-  if [ -d "$u/.cache" ]; then
-    find "$u/.cache" -mindepth 1 -maxdepth 1 ! -name 'n8n' -exec rm -rf {} + 2>/dev/null || true
-  fi
-done
-
-# 13. Menyegarkan RAM Cache
-echo "[+] Menyegarkan cache RAM sistem..."
-sync && echo 3 > /proc/sys/vm/drop_caches
-
-echo "--------------------------------------------------"
-echo "Kapasitas SESUDAH pembersihan:"
-df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
-echo "--------------------------------------------------"
-echo "Status RAM & Swap Saat Ini:"
-free -h
-echo "--------------------------------------------------"
-echo "[+] PEMBERSIHAN & REFRESH NGINX SELESAI!"
-echo "[+] Jadwal otomatis: Tiap 5 jam (Full) | Tiap 10 menit (Kuota $MAX_FILES file)."
-echo "[+] Ketik 'refresh-web' kapan saja untuk refresh cepat Nginx."
-echo "--------------------------------------------------"
-EOF
-
-sudo chmod +x /root/cleanup.sh
+# 2.
