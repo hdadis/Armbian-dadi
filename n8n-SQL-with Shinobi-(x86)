@@ -1,0 +1,179 @@
+#!/bin/bash
+
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
+
+# Hentikan script jika terjadi error pada perintah penting
+set -e
+
+echo "=== 1. Memeriksa & Menginstal Dependensi Dasar Sistem (x86_64) ==="
+apt-get update
+apt-get install -y curl wget build-essential git python3 python3-pip software-properties-common cron ca-certificates gnupg
+
+echo "=== 2. Memeriksa Node.js, NPM v10, & PM2 ==="
+if ! command -v node &> /dev/null; then
+  echo "Menginstal Node.js v20 LTS..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt-get install -y nodejs
+else
+  echo "Node.js sudah terinstal ($(node -v)), melewati instalasi Node.js."
+fi
+
+if ! command -v pm2 &> /dev/null; then
+  echo "Menginstal PM2 dan NPM v10..."
+  npm install -g pm2 npm@10 --no-audit --no-fund
+  hash -r
+else
+  echo "PM2 sudah terinstal, melewati instalasi PM2."
+fi
+
+echo "=== 3. Memeriksa Instalasi n8n v1.94.0 ==="
+if ! command -v n8n &> /dev/null; then
+  echo "n8n belum ditemukan. Menginstal n8n v1.94.0..."
+  NODE_OPTIONS="--max-old-space-size=4096" npm install -g n8n@1.94.0 --omit=dev --no-audit --no-fund
+else
+  echo "n8n sudah terinstal ($(n8n --version)), melewati proses instalasi ulang."
+fi
+
+echo "=== 4. Memperbarui Konfigurasi .env & Ecosystem PM2 (Perbaikan Webhook & RAM 4GB) ==="
+mkdir -p /root/n8n/downloads /home/node
+ln -sfn /root/n8n/downloads /home/node/downloads
+cd /root/n8n
+
+# Buat file .env sebagai cadangan referensi
+cat << 'EOT' > /root/n8n/.env
+N8N_HOST=0.0.0.0
+N8N_LISTEN_ADDRESS=0.0.0.0
+N8N_PORT=5678
+WEBHOOK_URL=https://ai.balai.my.id/
+N8N_EDITOR_BASE_URL=https://ai.balai.my.id/
+N8N_PROXY_HOPS=1
+N8N_SECURE_COOKIE=false
+N8N_DOWNLOAD_PATH=/home/node/downloads
+EXECUTIONS_DATA_MAX_AGE=72
+EXECUTIONS_DATA_PRUNE_MAX_COUNT=500
+EXECUTIONS_DATA_PRUNE=true
+N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+N8N_DIAGNOSTICS_ENABLED=false
+N8N_VERSION_NOTIFICATIONS_ENABLED=false
+EOT
+
+# Buat ecosystem.config.js agar PM2 mengunci WEBHOOK_URL secara permanen
+N8N_BIN=$(which n8n)
+cat << EOT > /root/n8n/ecosystem.config.js
+module.exports = {
+  apps: [
+    {
+      name: "n8n",
+      script: "${N8N_BIN}",
+      node_args: "--max-old-space-size=4096",
+      max_memory_restart: "4G",
+      env: {
+        N8N_HOST: "0.0.0.0",
+        N8N_LISTEN_ADDRESS: "0.0.0.0",
+        N8N_PORT: "5678",
+        WEBHOOK_URL: "https://ai.balai.my.id/",
+        N8N_EDITOR_BASE_URL: "https://ai.balai.my.id/",
+        N8N_PROXY_HOPS: "1",
+        N8N_SECURE_COOKIE: "false",
+        N8N_DOWNLOAD_PATH: "/home/node/downloads",
+        EXECUTIONS_DATA_MAX_AGE: "72",
+        EXECUTIONS_DATA_PRUNE_MAX_COUNT: "500",
+        EXECUTIONS_DATA_PRUNE: "true",
+        N8N_DEFAULT_BINARY_DATA_MODE: "filesystem",
+        N8N_DIAGNOSTICS_ENABLED: "false",
+        N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      }
+    }
+  ]
+};
+EOT
+
+echo "=== 5. Memastikan Cloudflared Menggunakan Versi x86_64 (AMD64) ==="
+# Timpa binary lama (jika sebelumnya terinstal versi ARM dari script STB) dengan paket resmi AMD64
+curl -fsSL --output /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+dpkg -i /tmp/cloudflared.deb
+rm -f /tmp/cloudflared.deb
+
+# Pasang ulang service tunnel dengan token
+cloudflared service uninstall 2>/dev/null || true
+cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
+systemctl restart cloudflared 2>/dev/null || true
+
+echo "=== 6. Memulai Ulang n8n di PM2 dengan Konfigurasi Baru ==="
+# Nyalakan kembali Shinobi (camera) jika ada
+pm2 start camera 2>/dev/null || true
+
+# Hapus proses n8n lama dan jalankan menggunakan ecosystem.config.js
+pm2 delete n8n 2>/dev/null || true
+pm2 start /root/n8n/ecosystem.config.js
+
+# Konfigurasi rotasi log PM2 untuk kapasitas disk x86 (Maksimal 50MB per file, simpan 5 file)
+pm2 install pm2-logrotate 2>/dev/null || true
+pm2 set pm2-logrotate:max_size 50M
+pm2 set pm2-logrotate:retain 5
+pm2 set pm2-logrotate:compress true
+
+# Simpan daftar proses PM2 agar bertahan saat reboot
+pm2 save
+env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root || true
+
+echo "=== 7. Memperbarui Pembersih Otomatis (Sesuai Kapasitas x86 16GB) ==="
+# Hapus sisa script pembersih agresif ala STB HG680P jika ada
+rm -f /etc/cron.daily/n8n-cleaner /usr/local/bin/clean-stb 2>/dev/null || true
+
+# A. Buat script pembatas folder downloads (Maksimal 24 jam & Maksimal 100 file)
+cat << 'EOF' > /usr/local/bin/limit-downloads
+#!/bin/bash
+TARGET_DIR="/root/n8n/downloads"
+
+if [ -d "$TARGET_DIR" ]; then
+  # 1. Hapus file di folder downloads yang umurnya lebih dari 24 jam (1440 menit)
+  find "$TARGET_DIR" -type f -mmin +1440 -delete
+
+  # 2. Jika jumlah file masih lebih dari 100, hapus file paling tua hingga tersisa 100 file terbaru
+  ls -1t "$TARGET_DIR" 2>/dev/null | tail -n +101 | while IFS= read -r file; do
+    rm -f "$TARGET_DIR/$file"
+  done
+fi
+
+# 3. Hapus juga file binaryData internal n8n yang umurnya lebih dari 72 jam (4320 menit)
+find /root/.n8n/binaryData -type f -mmin +4320 -delete 2>/dev/null || true
+EOF
+chmod +x /usr/local/bin/limit-downloads
+
+# Jadwalkan pengecekan folder downloads setiap 1 jam sekali via Cron
+echo "0 * * * * root /usr/local/bin/limit-downloads" > /etc/cron.d/n8n-download-limiter
+chmod 644 /etc/cron.d/n8n-download-limiter
+systemctl enable cron 2>/dev/null || true
+systemctl restart cron 2>/dev/null || true
+
+# B. Buat perintah "clean-server" untuk pembersihan mingguan yang sehat (tanpa drop_caches RAM)
+cat << 'EOF' > /usr/local/bin/clean-server
+#!/bin/bash
+echo "Menjalankan pembersihan berkala log, downloads, dan cache sementara..."
+/usr/local/bin/limit-downloads
+apt-get autoclean -y
+apt-get autoremove -y
+rm -rf /tmp/* /var/tmp/*
+journalctl --vacuum-size=100M
+echo "=== Status Penyimpanan Disk & RAM Saat Ini ==="
+df -h /
+free -h
+EOF
+chmod +x /usr/local/bin/clean-server
+
+# Pasang clean-server ke jadwal mingguan otomatis
+ln -sf /usr/local/bin/clean-server /etc/cron.weekly/n8n-cleaner
+
+echo "=== 8. Menjalankan Pembersihan Awal & Verifikasi ==="
+/usr/local/bin/clean-server
+
+echo "=== Selesai! Status PM2 & Verifikasi WEBHOOK_URL: ==="
+pm2 status
+echo "-----------------------------------------------------"
+echo "Nilai WEBHOOK_URL yang aktif di PM2 saat ini:"
+pm2 env $(pm2 id n8n | tr -d '[] ') | grep -E "WEBHOOK_URL|N8N_EDITOR_BASE_URL" || true
