@@ -92,13 +92,8 @@ N8N_SECURE_COOKIE=false
 # --- Environment Variable Custom ---
 N8N_DOWNLOAD_PATH=/home/node/downloads
 
-# Menentukan berapa jam data eksekusi disimpan (5 jam)
+# Menentukan berapa jam data eksekusi disimpan (5 jam, tanpa batas jumlah eksekusi)
 EXECUTIONS_DATA_MAX_AGE=5
-
-# Menentukan jumlah maksimal eksekusi yang disimpan (15 riwayat)
-EXECUTIONS_DATA_PRUNE_MAX_COUNT=15
-
-# Mengaktifkan penghapusan otomatis
 EXECUTIONS_DATA_PRUNE=true
 
 # --- Optimasi Tambahan Khusus STB HG680P (RAM 1GB & eMMC 8GB) ---
@@ -116,50 +111,45 @@ cloudflared service uninstall 2>/dev/null || true
 cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
 echo "=== 8. Menjalankan Shinobi & n8n secara Bersamaan di PM2 ==="
-# Hapus pm2-logrotate jika ada (menghemat ~40MB RAM, digantikan oleh cron di tahap 9)
 pm2 uninstall pm2-logrotate 2>/dev/null || true
 
-# Nyalakan kembali proses Shinobi (camera & cron) jika sebelumnya terinstal
 pm2 start camera 2>/dev/null || true
 pm2 start cron 2>/dev/null || true
 
-# Hapus instance n8n lama jika ada
 pm2 delete n8n 2>/dev/null || true
 
-# Muat isi file .env ke environment sistem
 set -a
 source /root/n8n/.env
 set +a
 
-# Jalankan n8n dengan batas memori 420MB (menyisakan ruang aman untuk Shinobi & OS)
 N8N_BIN=$(which n8n)
 pm2 start "$N8N_BIN" --name "n8n" --max-memory-restart 420M --node-args="--max-old-space-size=400" --update-env
 
-# Simpan konfigurasi PM2 agar Shinobi + n8n bertahan saat reboot
 pm2 save
 env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root || true
 
-echo "=== 9. Mengatur Pembersih Otomatis (Downloads, BinaryData & Log PM2) ==="
+echo "=== 9. Mengatur Pembersih Otomatis (Hapus File > 5 Jam Tanpa Batas Jumlah) ==="
 cat << 'EOF' > /usr/local/bin/limit-downloads
 #!/bin/bash
-TARGET_DIR="/root/n8n/downloads"
 
-if [ -d "$TARGET_DIR" ]; then
-  # 1. Hapus file di folder downloads yang umurnya lebih dari 5 jam (300 menit)
-  find "$TARGET_DIR" -type f -mmin +300 -delete
-
-  # 2. Jika jumlah file masih lebih dari 15, hapus file paling tua hingga tersisa 15 file terbaru
-  find "$TARGET_DIR" -maxdepth 1 -type f -printf '%T@ %p\n' 2>/dev/null | sort -zr -n | tail -z -n +16 | cut -z -d' ' -f2- | xargs -0 -r rm -f
+# 1. Hapus semua file di folder downloads yang umurnya lebih dari 5 jam (300 menit)
+if [ -d "/root/n8n/downloads" ]; then
+  find /root/n8n/downloads -type f -mmin +300 -delete 2>/dev/null || true
+  find /root/n8n/downloads -mindepth 1 -type d -empty -delete 2>/dev/null || true
 fi
 
-# 3. Hapus file binaryData internal n8n yang umurnya lebih dari 5 jam (300 menit)
-find /root/.n8n/binaryData -type f -mmin +300 -delete 2>/dev/null || true
+# 2. Hapus file binaryData internal n8n yang umurnya lebih dari 5 jam (300 menit)
+if [ -d "/root/.n8n/binaryData" ]; then
+  find /root/.n8n/binaryData -type f -mmin +300 -delete 2>/dev/null || true
+  find /root/.n8n/binaryData -mindepth 1 -type d -empty -delete 2>/dev/null || true
+fi
 
-# 4. Pangkas log PM2 jika ukurannya melebihi 5MB (menggantikan pm2-logrotate tanpa makan RAM)
+# 3. Pangkas log PM2 jika ukurannya melebihi 5MB
 find /root/.pm2/logs -type f -name "*.log" -size +5M -exec truncate -s 0 {} + 2>/dev/null || true
 EOF
 chmod +x /usr/local/bin/limit-downloads
 
+# Jadwalkan pengecekan setiap 15 menit sekali via Cron
 echo "*/15 * * * * root /usr/local/bin/limit-downloads" > /etc/cron.d/n8n-download-limiter
 chmod 644 /etc/cron.d/n8n-download-limiter
 systemctl enable cron 2>/dev/null || true
@@ -168,7 +158,7 @@ systemctl restart cron 2>/dev/null || true
 # Buat perintah "clean-stb" untuk pembersihan menyeluruh
 cat << 'EOF' > /usr/local/bin/clean-stb
 #!/bin/bash
-echo "Menjalankan pembersihan cache sistem, log, downloads, dan melegakan RAM..."
+echo "Menjalankan pembersihan cache sistem, log, downloads (>5 jam), dan melegakan RAM..."
 /usr/local/bin/limit-downloads
 apt-get clean
 apt-get autoclean -y
