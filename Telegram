@@ -1,41 +1,232 @@
-# 1. Update paket & install dependencies pendukung
-sudo apt-get update
-sudo apt install python3 python3-pip python3-venv arp-scan -y
-sudo apt install python3.10-venv
+sudo tee /root/cleanup.sh >/dev/null << 'EOF'
+#!/bin/bash
 
-# 2. Buat folder direktori kerja di /root
-sudo mkdir -p /root/armbian-bot && cd /root/armbian-bot
+# ==============================================================================
+# Script Pembersihan Menyeluruh, Auto-Cron 5 Jam & Refresh Nginx (Armbian STB HG680P)
+# Terintegrasi: n8n Safe UI, Purge Compiler, MOCP Safe, AdGuard Clean, Nginx
+# ==============================================================================
 
-# 3. Buat Virtual Environment & Install pustaka Python
-sudo python3 -m venv /root/armbian-bot/venv
-sudo /root/armbian-bot/venv/bin/pip install pyTelegramBotAPI requests psutil
+if [ "$EUID" -ne 0 ]; then
+  echo "[-] Harap jalankan script ini sebagai root (gunakan: sudo bash $0)"
+  exit 1
+fi
 
-# 4. Buat file bot.py
-sudo wget -O /root/armbian-bot/bot.py https://raw.githubusercontent.com/hdadis/Script/refs/heads/main/Telegram
+SCRIPT_PATH="/root/cleanup.sh"
+MODE="${1:-full}"
 
+CLEAN_DIRS=(
+  "/root/n8n/downloads"
+  "/home/node/downloads"
+  "/home/dadi/.n8n/binaryData"
+  "/home/dadi/Downloads"
+  "/var/www/n8n/downloads"
+  "/root/.n8n/binaryData"
+  "/root/Downloads"
+)
 
-# 5. Buat file armbianbot.service
-sudo bash -c 'cat << "EOF" > /etc/systemd/system/armbianbot.service
-[Unit]
-Description=Armbian Telegram Bot Monitor
-After=network.target
+WEB_DIRS=(
+  "/root/website"
+  "/home/armbian/website"
+  "/home/dadi/website"
+)
 
-[Service]
-User=root
-WorkingDirectory=/root/armbian-bot
-ExecStart=/root/armbian-bot/venv/bin/python3 /root/armbian-bot/bot.py
-Restart=always
-RestartSec=10
+clean_n8n_files() {
+  local FORCE_ALL="${1:-false}"
+  for d in "${CLEAN_DIRS[@]}"; do
+    # Lewati symlink agar tidak menghapus folder yang sama dua kali
+    if [ -d "$d" ] && [ ! -L "$d" ]; then
+      if [ "$FORCE_ALL" = "true" ]; then
+        # Mode manual (--all): Hapus semua file detik ini juga tanpa peduli umur file
+        find "$d" -mindepth 1 -delete 2>/dev/null || true
+      else
+        # Mode reguler (5 jam): Hapus file yang umurnya > 5 jam (300 menit) + subfolder kosong
+        find "$d" -type f -mmin +300 -delete 2>/dev/null || true
+        find "$d" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+      fi
+    fi
+  done
+}
 
-[Install]
-WantedBy=multi-user.target
+refresh_nginx_web() {
+  if command -v nginx >/dev/null 2>&1; then
+    echo "[+] Memperbarui izin akses folder website & memuat ulang Nginx..."
+    chmod 711 /root 2>/dev/null || true
+    for w in "${WEB_DIRS[@]}"; do
+      if [ -d "$w" ]; then
+        OWNER_USER=$(stat -c '%U' "$(dirname "$w")")
+        chmod o+x "$(dirname "$w")" 2>/dev/null || true
+        chown -R "$OWNER_USER":www-data "$w"
+        find "$w" -type d -exec chmod 2755 {} +
+        find "$w" -type f -exec chmod 644 {} +
+      fi
+    done
 
-EOF'
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx
+      echo "[+] Berhasil! Izin file website diperbarui & Nginx telah di-reload."
+    else
+      echo "[-] Peringatan: Konfigurasi Nginx bermasalah, reload dibatalkan!"
+      nginx -t
+    fi
+  fi
+}
 
+# ------------------------------------------------------------------------------
+# MODE CEPAT (Dipanggil lewat perintah 'refresh-web'): Hanya Refresh Nginx
+# ------------------------------------------------------------------------------
+if [ "$MODE" = "--web-only" ]; then
+  refresh_nginx_web
+  exit 0
+fi
 
-# 6. Reload daemon, aktifkan, dan jalankan service
-sudo systemctl daemon-reload
-sudo systemctl enable armbianbot.service
-sudo systemctl restart armbianbot.service
-sudo systemctl status armbianbot.service
-/root/armbian-bot/venv/bin/python3 /root/armbian-bot/bot.py
+# ------------------------------------------------------------------------------
+# MODE PENUH (Saat dijalankan manual atau otomatis setiap 5 jam)
+# ------------------------------------------------------------------------------
+
+CURRENT_SCRIPT="$(readlink -f "$0")"
+if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
+  cp -f "$CURRENT_SCRIPT" "$SCRIPT_PATH"
+  chmod +x "$SCRIPT_PATH"
+  echo "[+] Menyalin script secara permanen ke $SCRIPT_PATH..."
+fi
+
+# Buat shortcut perintah 'refresh-web' dan 'clean-stb' agar bisa dipanggil dari mana saja
+cat << 'EOS' > /usr/local/bin/refresh-web
+#!/bin/bash
+sudo /bin/bash /root/cleanup.sh --web-only
+EOS
+chmod +x /usr/local/bin/refresh-web
+
+cat << 'EOS' > /usr/local/bin/clean-stb
+#!/bin/bash
+sudo /bin/bash /root/cleanup.sh "$@"
+EOS
+chmod +x /usr/local/bin/clean-stb
+
+# Hapus file cron lama yang duplikat agar tidak bentrok
+rm -f /etc/cron.d/n8n-cleaner /etc/cron.d/n8n-download-limiter /etc/cron.daily/n8n-cleaner /usr/local/bin/n8n-cleaner.sh /usr/local/bin/limit-downloads /root/refresh.sh 2>/dev/null || true
+
+# 1. Fitur Otomatisasi Cron (Murni setiap 5 jam, TANPA batasan jumlah file)
+echo "[+] Memperbarui jadwal otomatis di Cron (Setiap 5 Jam, Tanpa Batas Jumlah File)..."
+(
+  crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" || true
+  echo "0 */5 * * * /bin/bash $SCRIPT_PATH >/dev/null 2>&1"
+) | crontab -
+echo "[+] Berhasil! Pembersihan otomatis tiap 5 jam telah aktif."
+
+echo "[+] Memulai pembersihan menyeluruh sistem Armbian..."
+echo "--------------------------------------------------"
+echo "Kapasitas SEBELUM pembersihan:"
+df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
+echo "--------------------------------------------------"
+
+# 2. Pastikan Swap kembali ke ukuran ideal 1GB (1024MB) jika memakai /swapfile > 1.1GB
+if [ -f /swapfile ]; then
+  SWAP_MB=$(du -m /swapfile | cut -f1)
+  if [ "$SWAP_MB" -gt 1100 ]; then
+    echo "[+] Mengecilkan /swapfile dari ${SWAP_MB}MB kembali ke default 1024MB (1GB)..."
+    swapoff /swapfile 2>/dev/null || true
+    rm -f /swapfile
+    dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null 2>&1
+    swapon /swapfile
+  fi
+fi
+
+# 3. Membersihkan file unduhan / binary tersimpan n8n
+if [ "$MODE" = "--all" ]; then
+  echo "[+] Menghapus SEMUA file unduhan & binary tersimpan n8n (Mode Paksa)..."
+  clean_n8n_files "true"
+else
+  echo "[+] Menghapus file unduhan & binary tersimpan n8n yang berumur > 5 jam..."
+  clean_n8n_files "false"
+fi
+
+# 4. Hapus paket kompilator (build-essential ~200MB) HANYA jika n8n sudah terinstal
+if command -v n8n >/dev/null 2>&1; then
+  if dpkg -l | grep -qE "^ii\s+build-essential"; then
+    echo "[+] n8n sudah terinstal! Menghapus build-essential (gcc/g++) untuk hemat ~200MB..."
+    apt-get remove --purge -y build-essential g++ gcc dpkg-dev >/dev/null 2>&1 || true
+  fi
+fi
+
+# 5. Membersihkan cache package APT, file .deb sisa, dan orphan packages
+echo "[+] Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
+apt-get autoremove --purge -y >/dev/null 2>&1 || true
+dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 || true
+apt-get autoclean -y >/dev/null 2>&1 || true
+apt-get clean -y >/dev/null 2>&1 || true
+rm -rf /var/lib/apt/lists/*
+
+# 6. Membersihkan cache NPM secara langsung
+echo "[+] Membersihkan cache NPM (root & semua user)..."
+rm -rf /root/.npm /home/*/.npm /root/.node-gyp /home/*/.node-gyp 2>/dev/null || true
+
+# 7. Memangkas log system (Systemd Journal & PostgreSQL log lama)
+echo "[+] Memangkas log systemd-journal & log sistem..."
+journalctl --vacuum-time=1d --vacuum-size=5M 2>/dev/null || true
+find /var/log -type f \( -name "*.gz" -o -name "*.1" -o -name "*.old" \) -delete 2>/dev/null || true
+truncate -s 0 /var/log/postgresql/*.log 2>/dev/null || true
+truncate -s 0 /var/log/nginx/*.log 2>/dev/null || true
+
+# 8. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP)
+echo "[+] Membersihkan file temporary (/tmp dan /var/tmp) tanpa memutus MOCP..."
+find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
+find /var/tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
+
+# 9. Membersihkan Query Log, Statistik, & Cache AdGuard Home secara Total (File-based)
+if systemctl is-active --quiet AdGuardHome; then
+  echo "[+] Membersihkan Query Log, Statistik, dan Cache AdGuard Home..."
+  systemctl stop AdGuardHome
+  rm -f /opt/AdGuardHome/data/querylog.json* 2>/dev/null || true
+  rm -f /opt/AdGuardHome/data/stats.db 2>/dev/null || true
+  rm -f /opt/AdGuardHome/data/cache.db 2>/dev/null || true
+  systemctl start AdGuardHome
+  echo "[+] Selesai! Statistik AdGuard Home telah di-reset ke 0."
+fi
+
+# 10. Membersihkan PM2 log (untuk root dan untuk user biasa seperti dadi)
+if command -v pm2 &> /dev/null; then
+  echo "[+] Membersihkan log PM2 (root & user n8n)..."
+  pm2 flush > /dev/null 2>&1 || true
+  find /root/.pm2/logs -type f -name "*.log" -exec truncate -s 0 {} + 2>/dev/null || true
+  for u in /home/*; do
+    USERNAME=$(basename "$u")
+    if [ -d "$u/.pm2" ]; then
+      su - "$USERNAME" -c "pm2 flush >/dev/null 2>&1" || true
+      find "$u/.pm2/logs" -type f -name "*.log" -exec truncate -s 0 {} + 2>/dev/null || true
+    fi
+  done
+fi
+
+# 11. Refresh Izin Akses Website & Reload Nginx
+refresh_nginx_web
+
+# 12. Membersihkan cache user lokal TANPA menghapus cache UI n8n (.cache/n8n)
+echo "[+] Membersihkan cache user lokal (aman untuk UI n8n)..."
+find /root/.cache -mindepth 1 -maxdepth 1 ! -name 'n8n' -exec rm -rf {} + 2>/dev/null || true
+for u in /home/*; do
+  if [ -d "$u/.cache" ]; then
+    find "$u/.cache" -mindepth 1 -maxdepth 1 ! -name 'n8n' -exec rm -rf {} + 2>/dev/null || true
+  fi
+done
+
+# 13. Menyegarkan RAM Cache
+echo "[+] Menyegarkan cache RAM sistem..."
+sync && echo 3 > /proc/sys/vm/drop_caches
+
+echo "--------------------------------------------------"
+echo "Kapasitas SESUDAH pembersihan:"
+df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
+echo "--------------------------------------------------"
+echo "Status RAM & Swap Saat Ini:"
+free -h
+echo "--------------------------------------------------"
+echo "[+] PEMBERSIHAN & REFRESH NGINX SELESAI!"
+echo "[+] Jadwal otomatis: Tiap 5 jam (Tanpa batas jumlah file)."
+echo "[+] Perintah cepat : 'clean-stb' (bersih >5 jam) | 'clean-stb --all' (sapu bersih semua file sekarang) | 'refresh-web' (reload Nginx)."
+echo "--------------------------------------------------"
+EOF
+
+sudo chmod +x /root/cleanup.sh
