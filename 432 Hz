@@ -41,7 +41,6 @@ sudo awk '
 { print }
 ' /etc/mpd.conf > /tmp/mpd.conf.tmp && sudo mv /tmp/mpd.conf.tmp /etc/mpd.conf
 
-sudo nano /etc/mpd.conf
 sudo systemctl restart mpd
 
 DAEMON_CONF="/etc/pulse/daemon.conf"
