@@ -28,6 +28,10 @@ cat << 'EOF' > claude_excel.py
 import os
 import sys
 import re
+import ast
+import glob
+import shutil
+import tempfile
 import subprocess
 import anthropic
 
@@ -37,11 +41,11 @@ if not API_KEY:
     sys.exit(1)
 
 client = anthropic.Anthropic(api_key=API_KEY)
-MODEL = "claude-opus-5-5"
-MAX_PERCOBAAN = 3
+# Bisa diganti lewat environment variable, mis. claude-sonnet-5-5 (lebih murah)
+MODEL = os.environ.get("EXCEL_MODEL", "claude-opus-5-5")
 
 print("=" * 70)
-print("   EXCEL BUILDER (LANGSUNG JADI .XLSX)")
+print("   EXCEL BUILDER (1x PANGGILAN API -> .XLSX)")
 print("=" * 70)
 print("Paste soal Anda, lalu ketik SELESAI di baris baru dan tekan ENTER:")
 print("-" * 70)
@@ -66,77 +70,192 @@ if not nama_output:
     nama_output = "Jawaban.xlsx"
 if not nama_output.lower().endswith(".xlsx"):
     nama_output += ".xlsx"
+nama_output = os.path.basename(nama_output)
 
-prompt_sistem = f"""You are a Python openpyxl script generator. Read the business case study and output ONLY a valid, complete Python script using `openpyxl` that saves an Excel file named `{nama_output}` in the current working directory.
+prompt_sistem = f"""You are an expert Python `openpyxl` script generator for business / finance case studies.
+Read the case study and output ONE complete, runnable Python script that saves an Excel file named `{nama_output}` in the current working directory.
 
-RULES:
-1. Build a professional spreadsheet: clear input/assumption cells, tables, number formatting, column widths, and ACTIVE EXCEL FORMULAS (=SUM, =A1-B1, variance, etc.) instead of hardcoded results.
-2. Use only openpyxl and the Python standard library.
-3. Always end the script with wb.save("{nama_output}").
-4. Output NO text outside the code. Your entire response must be one ```python code block, and the script must be complete (not truncated)."""
+OUTPUT FORMAT
+- Your entire response is exactly one ```python code block. No text outside it.
+- The script must be complete, never truncated. Keep it compact: write helper functions and loops instead of repeating code. Avoid decorative extras.
+- The last line must be: wb.save("{nama_output}")
+- Use only openpyxl and the Python standard library. No input(), no network, no external files.
+
+SPREADSHEET DESIGN
+- Put all assumptions/inputs in clearly labelled input cells (blue font, light yellow fill). Everything computed must be an ACTIVE EXCEL FORMULA referencing those cells. Never compute results in Python and write them as numbers.
+- Professional look: bold header row with fill, borders on tables, sensible column widths, number formats ('#,##0' for amounts, '0.0%' for percentages with the value stored as a fraction, e.g. 0.1), freeze panes where useful.
+- Write labels in the same language as the case study.
+- Answer every question in the case. Add a short "Jawaban/Answer" or summary section that links to the result cells with formulas.
+
+FORMULA RULES (very important, errors here break the file)
+- Every formula is a string starting with "=", English function names, comma separators.
+- Use ONLY classic functions: SUM, SUMIF, SUMIFS, SUMPRODUCT, AVERAGE, MIN, MAX, COUNT, COUNTIF, COUNTIFS, IF, AND, OR, IFERROR, ROUND, ABS, VLOOKUP, HLOOKUP, INDEX, MATCH, PMT, IPMT, PPMT, NPV, IRR, FV, PV, RATE, SLN, DB, DDB, SYD, EOMONTH, EDATE, DATE, YEAR, MONTH, TEXT.
+- NEVER use XLOOKUP, XMATCH, FILTER, SORT, SORTBY, UNIQUE, SEQUENCE, LET, LAMBDA, TEXTJOIN, CONCAT, IFS, SWITCH, MAXIFS, MINIFS (they show #NAME? when written by openpyxl).
+- Avoid division by zero: wrap with IF or IFERROR where a denominator could be 0.
+- Sheet names: max 31 chars, none of []:*?/\\ . In cross-sheet references always quote: ='Sheet Name'!B2.
+- Build cell addresses with openpyxl.utils.get_column_letter and track row numbers in variables so references point to the right cells. Double-check every reference.
+- Do not write into non-top-left cells of a merged range. Do not mix ws.append() with explicit cell positions on the same sheet.
+- Do not use charts, images, data validation or conditional formatting unless the case explicitly asks for them.
+- Avoid nested quotes inside f-strings (keep it compatible with Python 3.8+).
+"""
 
 
-def minta_kode(messages):
-    """Panggil Claude dengan streaming, kembalikan (teks, stop_reason)."""
+def minta_kode():
+    """SATU panggilan API saja. Kembalikan (teks, stop_reason, usage)."""
     with client.messages.stream(
         model=MODEL,
         max_tokens=32000,
         system=prompt_sistem,
-        messages=messages,
+        messages=[{"role": "user", "content": soal_user}],
     ) as stream:
         pesan = stream.get_final_message()
     teks = "".join(b.text for b in pesan.content if getattr(b, "type", "") == "text")
-    return teks, pesan.stop_reason
+    return teks, pesan.stop_reason, pesan.usage
 
 
 def ekstrak_kode(teks):
-    m = re.search(r"```(?:python|py)?[ \t]*\r?\n(.*?)```", teks, re.DOTALL)
-    if m:
-        return m.group(1)
-    # Fallback: tidak ada penutup (kemungkinan terpotong) -> buang backtick saja
+    blok = re.findall(r"```(?:python|py)?[ \t]*\r?\n(.*?)```", teks, re.DOTALL)
+    if blok:
+        return max(blok, key=len)
     return re.sub(r"```(?:python|py)?", "", teks)
 
 
-messages = [{"role": "user", "content": soal_user}]
+def perbaiki_lokal(kode):
+    """Perbaikan otomatis tanpa API."""
+    kode = kode.replace("\r\n", "\n").strip() + "\n"
+    if not re.search(r"\.save\(", kode):
+        kode += f'\nwb.save("{nama_output}")\n'
+    return kode
+
+
+def nama_unik(nama):
+    """Jangan pernah menimpa/menghapus file yang sudah ada."""
+    if not os.path.exists(nama):
+        return nama
+    dasar, ext = os.path.splitext(nama)
+    i = 1
+    while os.path.exists(f"{dasar}_{i}{ext}"):
+        i += 1
+    return f"{dasar}_{i}{ext}"
+
+
+FUNGSI_TERLARANG = re.compile(
+    r"\b(XLOOKUP|XMATCH|FILTER|SORTBY|SORT|UNIQUE|SEQUENCE|LET|LAMBDA|"
+    r"TEXTJOIN|CONCAT|IFS|SWITCH|MAXIFS|MINIFS)\(", re.I)
+
+
+def validasi_xlsx(path):
+    """Cek lokal (tanpa API). Hanya memberi peringatan."""
+    from openpyxl import load_workbook
+    peringatan = []
+    wb = load_workbook(path)
+    sheets = set(wb.sheetnames)
+    jumlah_rumus = 0
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                v = c.value
+                if isinstance(v, str) and v.startswith("="):
+                    jumlah_rumus += 1
+                    if FUNGSI_TERLARANG.search(v):
+                        peringatan.append(f"{ws.title}!{c.coordinate}: fungsi tidak kompatibel -> {v[:60]}")
+                    for ref in re.findall(r"(?:'([^']+)'|\b([A-Za-z_][\w\.]*))!", v):
+                        nama = ref[0] or ref[1]
+                        if nama not in sheets:
+                            peringatan.append(f"{ws.title}!{c.coordinate}: sheet '{nama}' tidak ada")
+    if jumlah_rumus == 0:
+        peringatan.append("Tidak ada rumus sama sekali di file ini.")
+    return jumlah_rumus, peringatan[:15]
+
+
+def cek_hasil_hitung(path, folder):
+    """Opsional: kalau LibreOffice terpasang, hitung ulang dan cari #REF!, #NAME?, dst."""
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        return None
+    try:
+        out = os.path.join(folder, "recalc")
+        os.makedirs(out, exist_ok=True)
+        subprocess.run([soffice, "--headless", "--convert-to", "xlsx", "--outdir", out, path],
+                       capture_output=True, timeout=90)
+        hasil = os.path.join(out, os.path.basename(path))
+        if not os.path.exists(hasil):
+            return None
+        from openpyxl import load_workbook
+        wb = load_workbook(hasil, data_only=True)
+        galat = []
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for c in row:
+                    if isinstance(c.value, str) and re.match(r"#(REF|NAME|DIV/0|VALUE|N/A|NUM|NULL)", c.value):
+                        galat.append(f"{ws.title}!{c.coordinate}: {c.value}")
+        return galat[:15]
+    except Exception:
+        return None
+
 
 try:
-    for percobaan in range(1, MAX_PERCOBAAN + 1):
-        print(f"\n[*] Percobaan {percobaan}/{MAX_PERCOBAAN}: meminta Claude merakit script Excel...")
-        teks, stop = minta_kode(messages)
+    print(f"\n[*] Memanggil {MODEL} (hanya 1 kali)...")
+    teks, stop, usage = minta_kode()
+    print(f"[i] Token: input={usage.input_tokens}, output={usage.output_tokens}")
 
-        if stop == "max_tokens":
-            print("[!] Peringatan: respons terpotong (max_tokens). Script mungkin tidak lengkap.")
+    kode = perbaiki_lokal(ekstrak_kode(teks))
 
-        kode = ekstrak_kode(teks)
-        with open("_temp_builder.py", "w", encoding="utf-8") as f:
+    # Simpan kode selalu, supaya hasil API yang sudah dibayar tidak terbuang
+    with open("_temp_builder.py", "w", encoding="utf-8") as f:
+        f.write(kode)
+
+    if stop == "max_tokens":
+        print("[!] Respons terpotong (max_tokens). Kode kemungkinan tidak lengkap.")
+
+    try:
+        ast.parse(kode)
+    except SyntaxError as e:
+        print(f"[!] Kode dari Claude punya kesalahan sintaks (baris {e.lineno}): {e.msg}")
+        print("    Kode disimpan di '_temp_builder.py' agar bisa diperbaiki manual tanpa biaya API.")
+        sys.exit(1)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        script_path = os.path.join(tmp, "builder.py")
+        with open(script_path, "w", encoding="utf-8") as f:
             f.write(kode)
 
-        if os.path.exists(nama_output):
-            os.remove(nama_output)
-
-        print("[*] Menjalankan script perakit Excel...")
+        print("[*] Menjalankan script perakit Excel (folder sementara)...")
         hasil = subprocess.run(
-            [sys.executable, "_temp_builder.py"],
-            capture_output=True, text=True, timeout=180
+            [sys.executable, script_path],
+            capture_output=True, text=True, timeout=180, cwd=tmp
         )
 
-        if hasil.returncode == 0 and os.path.exists(nama_output):
-            print(f"\n[✓] BERHASIL! File: {os.path.abspath(nama_output)}")
-            sys.exit(0)
+        kandidat = os.path.join(tmp, nama_output)
+        if not os.path.exists(kandidat):
+            lain = glob.glob(os.path.join(tmp, "*.xlsx"))
+            kandidat = lain[0] if lain else None
 
-        error_msg = (hasil.stderr or hasil.stdout or "File output tidak terbentuk.").strip()
-        print("\n[!] Script gagal dijalankan. Error:\n" + error_msg[-1500:])
+        if kandidat is None:
+            err = (hasil.stderr or hasil.stdout or "File output tidak terbentuk.").strip()
+            print("\n[!] Script gagal. Error:\n" + err[-1500:])
+            print("    Kode ada di '_temp_builder.py' (bisa diedit manual, tanpa biaya API).")
+            sys.exit(1)
 
-        # Kirim error balik ke Claude agar diperbaiki
-        messages.append({"role": "assistant", "content": teks})
-        messages.append({
-            "role": "user",
-            "content": f"Script tadi gagal dengan error berikut:\n\n{error_msg[-3000:]}\n\n"
-                       f"Perbaiki dan keluarkan ulang script LENGKAP dalam satu blok ```python."
-        })
+        jumlah_rumus, peringatan = validasi_xlsx(kandidat)
+        galat_hitung = cek_hasil_hitung(kandidat, tmp)
 
-    print("\n[!] Gagal setelah beberapa percobaan. Kode terakhir ada di '_temp_builder.py'.")
-    sys.exit(1)
+        tujuan = nama_unik(nama_output)
+        shutil.move(kandidat, tujuan)
+
+    print(f"\n[✓] BERHASIL! File: {os.path.abspath(tujuan)}")
+    print(f"[i] Jumlah rumus aktif: {jumlah_rumus}")
+    if peringatan:
+        print("[!] Peringatan (cek manual):")
+        for p in peringatan:
+            print("    - " + p)
+    if galat_hitung:
+        print("[!] Sel dengan error setelah dihitung ulang:")
+        for g in galat_hitung:
+            print("    - " + g)
+    elif galat_hitung is not None:
+        print("[✓] Hitung ulang (LibreOffice): tidak ada sel error.")
+    sys.exit(0)
 
 except anthropic.APIError as e:
     print(f"\n[!] Error API: {e}")
