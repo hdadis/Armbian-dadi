@@ -1,0 +1,200 @@
+#!/bin/bash
+# ==============================================================================
+# All-in-One Installer: Claude Excel Builder & Analyzer
+# Target: Armbian 24 / STB HG680P (1GB RAM - Amlogic S905X)
+# ==============================================================================
+
+set -e
+
+echo "[1/5] Memperbarui daftar repositori..."
+sudo apt-get update
+
+echo "[2/5] Menginstal Python3, Venv, dan dependensi pre-built (Hemat RAM)..."
+sudo apt install -y python3 python3-pip python3-venv python3-cffi python3-cryptography
+
+echo "[3/5] Menyiapkan direktori kerja di ~/excel-bot..."
+mkdir -p ~/excel-bot
+cd ~/excel-bot
+
+echo "[4/5] Membuat Virtual Environment & menginstal pustaka (OpenPyXL & Anthropic)..."
+python3 -m venv --system-site-packages venv
+source venv/bin/activate
+
+pip install --no-cache-dir --upgrade pip
+pip install --no-cache-dir openpyxl anthropic
+
+echo "[5/5] Membuat program utama (claude_excel.py)..."
+cat << 'EOF' > claude_excel.py
+import os
+import sys
+import re
+import openpyxl
+import anthropic
+
+# Ambil API Key dari Environment Variable
+API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+if not API_KEY or API_KEY == "MASUKKAN_API_KEY_ANDA_DISINI":
+    print("\n[!] ERROR: ANTHROPIC_API_KEY belum diatur!")
+    print("Jalankan perintah ini di terminal sebelum memulai:")
+    print("export ANTHROPIC_API_KEY='sk-ant-api03-xxxx'\n")
+    sys.exit(1)
+
+client = anthropic.Anthropic(api_key=API_KEY)
+
+def input_soal_multibaris():
+    print("\nSilakan PASTE seluruh soal/instruksi Anda di bawah ini.")
+    print("Jika sudah selesai paste, tekan ENTER, ketik SELESAI lalu tekan ENTER:")
+    print("----------------------------------------------------------------------")
+    baris_soal = []
+    while True:
+        try:
+            baris = input()
+            if baris.strip().upper() == "SELESAI":
+                break
+            baris_soal.append(baris)
+        except EOFError:
+            break
+    soal = "\n".join(baris_soal).strip()
+    if not soal:
+        print("\n[!] Soal kosong. Program dibatalkan.")
+        sys.exit(1)
+    return soal
+
+def baca_excel_hemat_ram(file_path, max_baris=300):
+    if not os.path.exists(file_path):
+        print(f"\n[!] File '{file_path}' tidak ditemukan!")
+        sys.exit(1)
+        
+    print(f"[*] Membaca '{file_path}' (Mode Hemat RAM)...")
+    wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+    ringkasan_data = []
+    
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        ringkasan_data.append(f"=== SHEET: {sheet_name} ===")
+        hitung_baris = 0
+        for row in ws.iter_rows(values_only=True):
+            if any(cell is not None for cell in row):
+                baris_teks = "\t".join([str(cell) if cell is not None else "" for cell in row])
+                ringkasan_data.append(baris_teks)
+                hitung_baris += 1
+            if hitung_baris >= max_baris:
+                ringkasan_data.append(f"... (Dipotong pada {max_baris} baris pertama)")
+                break
+    wb.close()
+    return "\n".join(ringkasan_data)
+
+def mode_auto_build_excel():
+    soal_user = input_soal_multibaris()
+    nama_output = input("\nMasukkan nama file Excel output (Enter untuk default 'Hasil_Jawaban.xlsx'): ").strip()
+    if not nama_output:
+        nama_output = "Hasil_Jawaban.xlsx"
+    if not nama_output.endswith(".xlsx"):
+        nama_output += ".xlsx"
+
+    prompt_sistem = f"""Kamu adalah Senior Financial Analyst (FP&A) dan Python openpyxl expert.
+Tugasmu adalah membaca soal studi kasus bisnis dari user, lalu menuliskan KODE PYTHON LENGKAP menggunakan library `openpyxl` untuk menghasilkan file Excel bernama `{nama_output}`.
+
+ATURAN WAJIB:
+1. Patuhi batasan jumlah Sheet pada soal (Misal: maksimal 2 Sheet: Sheet 1 = 'Financial Analysis', Sheet 2 = 'Management Summary').
+2. WAJIB menggunakan RUMUS EXCEL AKTIF (contoh: `=SUM(...)`, `=B5+C5`, `=B2-D14`, `=E15/B2`, dll) untuk setiap perhitungan di tabel! JANGAN menulis angka hasil hitungan statis pada sel yang seharusnya berisi rumus!
+3. Berikan styling rapi & profesional (Header warna biru tua/abu-abu gelap dengan font putih bold, border tabel tipis, format angka `#,##0`, format persentase `0.0%`, dan sesuaikan lebar kolom otomatis agar tidak terpotong).
+4. Jawab SELURUH pertanyaan analisis kualitatif secara mendalam, terstruktur, dan tajam langsung di dalam Sheet Excel tersebut.
+5. HANYA berikan balasan berupa blok kode Python ```python ... ``` tanpa teks penjelasan di luar blok kode agar bisa langsung dieksekusi oleh sistem."""
+
+    print("\n[*] Mengirim soal ke Claude & merancang struktur rumus Excel... (Tunggu ±30 detik)")
+    
+    try:
+        response = client.messages.create(
+            model="claude-3-5-sonnet-latest",
+            max_tokens=4096,
+            system=prompt_sistem,
+            messages=[{"role": "user", "content": soal_user}]
+        )
+        
+        teks_respon = response.content[0].text
+        match = re.search(r"```python\n(.*?)```", teks_respon, re.DOTALL)
+        kode_python = match.group(1) if match else teks_respon
+
+        with open("_temp_builder.py", "w", encoding="utf-8") as f:
+            f.write(kode_python)
+
+        print("[*] Kode diterima! Sedang merakit file Excel...")
+        exit_code = os.system("python3 _temp_builder.py")
+        
+        if exit_code == 0 and os.path.exists(nama_output):
+            print(f"\n[✓] SUKSES! File '{nama_output}' berhasil dibuat di ~/excel-bot/{nama_output}")
+        else:
+            print("\n[!] Terjadi kendala saat mengeksekusi kode pembuat Excel. Cek file '_temp_builder.py'.")
+            
+    except Exception as e:
+        print(f"\n[!] Error API Claude: {e}")
+
+def mode_analisis_file_excel():
+    file_excel = input("\nMasukkan nama/path file Excel yang ingin dianalisis (kosongkan jika tanpa file): ").strip()
+    konteks_excel = ""
+    if file_excel:
+        konteks_excel = baca_excel_hemat_ram(file_excel)
+        print("[✓] Data Excel berhasil dibaca!")
+
+    soal_user = input_soal_multibaris()
+    
+    if konteks_excel:
+        prompt_lengkap = (
+            f"Berikut adalah isi data dari file Excel saya:\n\n{konteks_excel}\n\n"
+            f"--- PERTANYAAN / INSTRUKSI ---\n{soal_user}\n\n"
+            f"Berikan analisis lengkap, perhitungan, serta rumus Excel yang tepat untuk menyelesaikan soal di atas."
+        )
+    else:
+        prompt_lengkap = soal_user
+
+    print("\n[*] Meminta analisis dari Claude...\n")
+    print("================ JAWABAN CLAUDE ================\n")
+    hasil_jawaban = []
+    try:
+        with client.messages.stream(
+            model="claude-3-5-sonnet-latest",
+            max_tokens=3000,
+            messages=[{"role": "user", "content": prompt_lengkap}]
+        ) as stream:
+            for text in stream.text_stream:
+                print(text, end="", flush=True)
+                hasil_jawaban.append(text)
+        print("\n\n================================================")
+        
+        with open("hasil_analisis_claude.txt", "w", encoding="utf-8") as f:
+            f.write("".join(hasil_jawaban))
+        print("[✓] Jawaban disimpan ke: ~/excel-bot/hasil_analisis_claude.txt")
+    except Exception as e:
+        print(f"\n[!] Error API Claude: {e}")
+
+def main():
+    print("==========================================================")
+    print("        CLAUDE EXCEL ASSISTANT (ARMBIAN HG680P)           ")
+    print("==========================================================")
+    print("Pilih Mode Penggunaan:")
+    print("  [1] Paste Soal Studi Kasus -> Otomatis Jadi File .XLSX (Rumus Aktif)")
+    print("  [2] Analisis File Excel yang Ada + Paste Soal -> Jawaban Teks (.TXT)")
+    
+    pilihan = input("\nMasukkan pilihan Anda (1 atau 2): ").strip()
+    if pilihan == "1":
+        mode_auto_build_excel()
+    elif pilihan == "2":
+        mode_analisis_file_excel()
+    else:
+        print("[!] Pilihan tidak valid. Keluar.")
+
+if __name__ == "__main__":
+    main()
+EOF
+
+echo "=================================================================="
+echo "Instalasi All-in-One Selesai!"
+echo ""
+echo "Cara Pakai:"
+echo "  1. cd ~/excel-bot"
+echo "  2. source venv/bin/activate"
+echo "  3. export ANTHROPIC_API_KEY='sk-ant-api03-key-anda'"
+echo "  4. python3 claude_excel.py"
+echo "=================================================================="
