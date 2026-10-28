@@ -92,18 +92,13 @@ Do NOT output any Markdown report, explanations, or text outside the `<excel_scr
 
 ---
 
-# 1. WORKBOOK STRUCTURE & LAYOUT RULES
-Follow the case study literally. Answer EVERY question and sub-question in the exact order asked, using the question numbering in the section titles. Never add extra sheets that were not requested. Choose the layout based on the case requirements:
-- **Case-Specific Layout**: If the case specifies the exact sheets (number, names, order), tables, or columns, build that exact structure.
-- **Standard 2-Sheet Layout (Default if unspecified)**:
-  1. `"Analysis"`: Contains all inputs, assumptions, step-by-step calculations, scenario tables, and answers per question.
-  2. `"Summary"` (or `"Analisis"`): Contains key figures linked via formulas to `"Analysis"`, reconciliation checks, executive conclusions, recommendations, and numbered action items.
-- **Single-Sheet Dashboard Layout (For Project/Budget Reviews or when a 1-sheet dashboard is requested)**:
-  1. **Title Block**: Bold size 14-16 dark navy (`1F3864`) title (e.g., `"<Project> - Financial Review & Closure Analysis"`), with an italic grey (`595959`) subtitle below it: `"Prepared by: Senior FP&A | All amounts in <currency> | Yellow cells = inputs; all other figures are live formulas"`.
-  2. **Section Band 1 - `"INPUTS & ASSUMPTIONS"`**: Full-width band containing label/value rows for every given input (revenue, target margin, additional unbudgeted requests, related cost category, etc.).
-  3. **Section Band 2 - `"BUDGET vs ACTUAL vs EXPECTED COST (incl. outstanding commitments)"`**: Main variance table with columns: `Cost Category | Approved Budget | Actual Cost (Invoiced) | Outstanding Commitment | Total Expected Cost (=C+D) | Actual vs Budget (=C-B) | Expected Variance (=E-B) | Variance % (=G/B) | Status | Additional Request (unbudgeted) | Expected Cost incl. Request | Variance incl. Request | Clarification Required Before Closure`.
-  4. **Section Band 3 - `"PROJECT FINANCIAL SUMMARY - SCENARIO COMPARISON"`**: Table with columns: `Metric | Approved Budget | Current Expected (excl. request) | If Request Approved | Formula / Logic`. Cover Revenue, Total Cost, Gross Profit, Gross Margin %, Target Margin, Margin Gap vs Target, and other relevant metrics.
-  5. **Subsequent Sections**: Same band and table style for remaining case questions (risks, approval decisions, action items), ending with a merged full-width area for the final conclusion and recommendation.
+# 1. STRUCTURE
+- Follow the case study literally. If it specifies the sheets (number, names, order), tables, columns or questions, build exactly that.
+- Answer EVERY question and sub-question in the order asked. Use the question numbering in the section titles.
+- Never add sheets that were not asked for.
+- If the case does not specify a layout, use 2 sheets:
+  1. "Analysis": a dashboard-style review with the sections below.
+  2. "Summary": key figures linked to Analysis, checks, conclusion, recommendation and action items. Name it in the language of the case.
 
 ---
 
