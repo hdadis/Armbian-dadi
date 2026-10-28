@@ -32,6 +32,7 @@ import sys
 import re
 import ast
 import glob
+import time
 import shutil
 import tempfile
 import subprocess
@@ -39,18 +40,23 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-# Konfigurasi API Key (Dapat disesuaikan menggunakan Environment Variable)
-API_KEY = os.environ.get("GEMINI_API_KEY", "xxxxxxxxxxxxxxx")
+API_KEY = os.environ.get("GEMINI_API_KEY", "xxxxxxx")
 if not API_KEY:
     print("\n[!] ERROR: GEMINI_API_KEY belum diatur!")
     sys.exit(1)
 
-MODEL = os.environ.get("EXCEL_MODEL", "gemini-3.6-flash")
+# Konfigurasi Nama Remote rclone & Folder Tujuan di Google Drive
+RCLONE_REMOTE = os.environ.get("RCLONE_REMOTE", "gdrive")
+GDRIVE_FOLDER = os.environ.get("GDRIVE_FOLDER", "Hasil_Excel")
+
+DAFTAR_MODEL = [
+    ("gemini-3.8-flash", 7),
+]
 
 print("=" * 70)
-print("   GEMINI ADVANCED FP&A BUILDER & REPORT GENERATOR")
+print("   GEMINI ADVANCED FP&A EXCEL BUILDER (+GDRIVE)")
 print("=" * 70)
-print("Paste soal/kasus Anda, lalu ketik X di baris baru dan tekan ENTER:")
+print("Paste soal/kasus Anda, lalu ketik SELESAI di baris baru dan tekan ENTER:")
 print("-" * 70)
 
 baris_soal = []
@@ -59,7 +65,7 @@ while True:
         baris = input()
     except EOFError:
         break
-    if baris.strip().upper() == "X":
+    if baris.strip().upper() == "SELESAI":
         break
     baris_soal.append(baris)
 
@@ -68,31 +74,70 @@ if not soal_user:
     print("\n[!] Soal kosong. Batal.")
     sys.exit(1)
 
-# Nama file output diatur otomatis
 nama_output = "laporan.xlsx"
 print(f"\n[*] Target file output: {nama_output}")
 
-# Prompt Sistem Profesional FP&A Excel & Markdown
-PROMPT_SISTEM = f"""You are a senior finance analyst (FP&A, accounting, corporate finance) and an expert Python/openpyxl developer. Read the case study and answer it fully. Return exactly two parts, in this order, and nothing outside the tags:
-<excel_script>raw Python code (no markdown fences), openpyxl + standard library only, that saves "__OUT__" in the current directory</excel_script>
-<laporan>detailed written analysis in Markdown</laporan>
+PROMPT_SISTEM = f"""You are a Senior Finance Analyst (FP&A, Accounting, Corporate Finance) and an expert Python/`openpyxl` developer.
 
-LANGUAGE: write all Excel labels and the report in the same language as the case study.
-STRUCTURE: follow the case study literally. If it specifies the sheets (number, names, order), tables, columns or questions, build exactly that and answer EVERY question and sub-question in the order asked, using the question numbering in the section titles. Never add sheets that were not asked for. If the case does not specify the layout, use 2 sheets: "Analysis" (inputs, calculations, answers per question) and "Summary" (key figures linked to Analysis, checks, conclusion, recommendation, action items).
+# TASK & OUTPUT FORMAT
+Read the business case study below and answer it fully inside an Excel workbook. If a completed written analysis is also provided, use it as the strict source of truth: all Excel numbers, logic, and structures must match the written analysis exactly.
 
-EXCEL CONTENT (detailed, analytical, but compact):
-- Inputs at the top: every number given in the case in its own cell (yellow fill FFF2CC, bold blue font 0000FF). Add a short italic grey note for every assumption you add.
-- Every result is a live formula that references input cells. Never compute in Python and paste values. Quote sheet names with spaces or & in formulas, e.g. 'Summary & Closure'!B2.
-- Every table: header row fill 1F3864 with white bold wrapped text; show the formula logic in the header or in an adjacent "Formula / Logic" column; TOTAL row fill E7E6E6 bold; IF-formula status columns; a check cell (formula) that reconciles totals to the figures stated in the case.
-- Add a wrapped-text commentary column per row or per metric with case-specific analysis: what the number means, the risk, what must be verified, largest and smallest items. Include scenario comparison, sensitivity, key risk metrics, thresholds or targets wherever relevant to the case.
-- The summary sheet or section must contain: key figures linked by formula, financial impact, a clear conclusion, a recommendation and numbered action items. Sentences that contain numbers must be formulas such as ="Cost rises to "&TEXT(Analysis!C28,"#,##0"), so they stay live.
-- Interpret every result (the "so what"): compare with targets, quantify the impact, state the decision and the conditions.
-- Format: Calibri 11; title bold 16 navy 1F3864; italic grey 595959 subtitle; section bands fill D9E1F2 with bold navy text; amounts #,##0;(#,##0);"-" ; percentages 0.0%;(0.0%);"-" ; thin light-grey borders; gridlines hidden; freeze panes below the main header; set column widths and row heights so wrapped text is fully visible; merge long text cells across the table width.
-- Use only widely supported functions: IF, IFERROR, AND, OR, SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNTIF, INDEX, MATCH, MAX, MIN, AVERAGE, ROUND, TEXT, NPV, IRR, PMT. Never use XLOOKUP, FILTER, SORT, UNIQUE, LET or dynamic arrays.
+Write all Excel labels, headers, and commentary in the **same language as the case study**.
 
-CODE EFFICIENCY (saves tokens): keep the script compact. Define small helper functions for styling and for writing rows, and use loops. No comments, no docstrings, no prints. The script must be complete (never truncated) and end with wb.save("__OUT__").
+Return your response as **ONLY the Python Script** enclosed inside `<excel_script>` tags:
+<excel_script>
+raw Python code (no markdown fences), openpyxl + standard library only, that builds the dynamic Excel model and ends with wb.save("__OUT__")
+</excel_script>
+Do NOT output any Markdown report, explanations, or text outside the `<excel_script>` tags.
 
-REPORT (inside <laporan>): Markdown with headings in the language of the case. Detailed but do not copy every Excel cell. Sections: executive summary (key numbers and verdict); assumptions; answer to each question with formulas and figures step by step (tables allowed); analysis, interpretation and risks; conclusion, recommendation and actions. Every number must equal what the Excel formulas produce.
+---
+
+# 1. WORKBOOK STRUCTURE & LAYOUT RULES
+Follow the case study literally. Answer EVERY question and sub-question in the exact order asked, using the question numbering in the section titles. Never add extra sheets that were not requested. Choose the layout based on the case requirements:
+- **Case-Specific Layout**: If the case specifies the exact sheets (number, names, order), tables, or columns, build that exact structure.
+- **Standard 2-Sheet Layout (Default if unspecified)**:
+  1. `"Analysis"`: Contains all inputs, assumptions, step-by-step calculations, scenario tables, and answers per question.
+  2. `"Summary"` (or `"Analisis"`): Contains key figures linked via formulas to `"Analysis"`, reconciliation checks, executive conclusions, recommendations, and numbered action items.
+- **Single-Sheet Dashboard Layout (For Project/Budget Reviews or when a 1-sheet dashboard is requested)**:
+  1. **Title Block**: Bold size 14-16 dark navy (`1F3864`) title (e.g., `"<Project> - Financial Review & Closure Analysis"`), with an italic grey (`595959`) subtitle below it: `"Prepared by: Senior FP&A | All amounts in <currency> | Yellow cells = inputs; all other figures are live formulas"`.
+  2. **Section Band 1 - `"INPUTS & ASSUMPTIONS"`**: Full-width band containing label/value rows for every given input (revenue, target margin, additional unbudgeted requests, related cost category, etc.).
+  3. **Section Band 2 - `"BUDGET vs ACTUAL vs EXPECTED COST (incl. outstanding commitments)"`**: Main variance table with columns: `Cost Category | Approved Budget | Actual Cost (Invoiced) | Outstanding Commitment | Total Expected Cost (=C+D) | Actual vs Budget (=C-B) | Expected Variance (=E-B) | Variance % (=G/B) | Status | Additional Request (unbudgeted) | Expected Cost incl. Request | Variance incl. Request | Clarification Required Before Closure`.
+  4. **Section Band 3 - `"PROJECT FINANCIAL SUMMARY - SCENARIO COMPARISON"`**: Table with columns: `Metric | Approved Budget | Current Expected (excl. request) | If Request Approved | Formula / Logic`. Cover Revenue, Total Cost, Gross Profit, Gross Margin %, Target Margin, Margin Gap vs Target, and other relevant metrics.
+  5. **Subsequent Sections**: Same band and table style for remaining case questions (risks, approval decisions, action items), ending with a merged full-width area for the final conclusion and recommendation.
+
+---
+
+# 2. EXCEL CONTENT & FINANCIAL MODELING STANDARDS
+- **Dedicated Input Cells**: Place all raw numbers given in the case at the top of the sheet in their own cells with **light yellow fill (`FFF2CC`) and bold blue font (`0000FF`)**. Add a short italic grey note beside every assumption added or input requiring validation.
+- **100% Live Formulas**: Every calculated result MUST be a live Excel formula referencing input/calculation cells. **Never compute results in Python and paste static values.** Always wrap sheet names containing spaces or `&` in single quotes (e.g., `'Summary & Closure'!B2`).
+- **Formula Compatibility**: Use only universally supported Excel functions: `IF`, `IFERROR`, `AND`, `OR`, `SUM`, `SUMIF`, `SUMIFS`, `SUMPRODUCT`, `COUNTIF`, `INDEX`, `MATCH`, `MAX`, `MIN`, `AVERAGE`, `ROUND`, `TEXT`, `NPV`, `IRR`, `PMT`. **Strictly forbidden**: `XLOOKUP`, `FILTER`, `SORT`, `UNIQUE`, `LET`, or dynamic array formulas.
+- **Transparent Formula Logic**: Show the formula logic either directly inside the column header (e.g., `"Total Expected Cost (=C+D)"`) or in an adjacent `"Formula / Logic"` column explaining the calculation in plain words.
+- **Dynamic Conditional Allocations & Statuses**:
+  * Allocate specific unbudgeted requests dynamically using `IF` formulas comparing the row's category name to the input category cell.
+  * Build automated **Status Columns** using nested `IF` formulas (e.g., returning `"OVERRUN - already invoiced"`, `"POTENTIAL OVERRUN (commitment)"`, `"UNDER BUDGET"`, or `"AT BUDGET - fully consumed"` based on actual vs. budget and expected vs. budget).
+- **Reconciliation & Audit Checks**: Under every main table, add a check row in small italic text comparing calculated totals against source figures stated in the case using an `IF` formula that returns `"TIES TO SOURCE ✓"` or `"CHECK ERROR"`.
+- **Live Formula-Driven Narratives**: In summary sections, sentences containing numbers must be built as live string-concatenated formulas so they update automatically, e.g., `="Total cost rises to "&TEXT(Analysis!C28,"#,##0")&", resulting in a margin gap."`
+- **Deep Analytical Commentary ("The So What")**: Include a wrapped-text commentary/clarification column per row or metric providing case-specific insights: what the number means, key risks, what must be verified before closure, largest and highest-percentage drivers, scenario comparisons, sensitivities, and comparisons against targets/thresholds. State clear decisions and conditions.
+
+---
+
+# 3. VISUAL STYLING & FORMATTING SPECIFICATIONS
+- **Typography**: `Calibri` size 11 for body; Title in bold size 14-16 dark navy (`1F3864`); Subtitle in italic grey (`595959`).
+- **Section Bands**: Full-width light blue-lavender fill (`D9E1F2`) with bold navy (`1F3864`) text.
+- **Table Headers**: Dark navy fill (`1F3864`), white bold centered text, `wrap_text=True`, tall row height.
+- **Total Rows**: Grey fill (`E7E6E6` or `D9D9D9`), bold font, `SUM` formulas, and overall status formula (e.g., `"TOTAL PROJECT OVER BUDGET"`).
+- **Number Formatting**:
+  * Amounts/Currency: `#,##0;(#,##0);"-"`
+  * Percentages: `0.0%;(0.0%);"-"`
+- **Grid & Layout Polish**: Thin light-grey borders on all table cells; hide worksheet gridlines (`ws.views.sheetView[0].showGridLines = False`); freeze panes below the main table header; auto-adjust column widths and row heights so all wrapped text is 100% visible without truncation; merge long narrative cells across the table width.
+
+---
+
+# 4. PYTHON CODE EFFICIENCY RULES
+- Keep the Python script compact and token-efficient.
+- Define small helper functions for cell styling, borders, number formats, and row writing; use loops for populating tables.
+- **No comments, no docstrings, no `print()` statements.**
+- Never truncate the code. The script must be 100% complete and executable out of the box, ending with `wb.save("__OUT__")`.
 """
 
 def minta_respons(prompt_teks, sys_inst=None):
@@ -101,64 +146,94 @@ def minta_respons(prompt_teks, sys_inst=None):
         max_output_tokens=32000,
         temperature=0.2,
     )
-    try:
-        client = genai.Client(api_key=API_KEY)
-        resp = client.models.generate_content(model=MODEL, contents=prompt_teks, config=cfg)
-    except Exception as e1:
-        if "API_KEY_INVALID" in str(e1) or "400" in str(e1):
-            client = genai.Client(vertexai=True, api_key=API_KEY)
-            resp = client.models.generate_content(model=MODEL, contents=prompt_teks, config=cfg)
-        else:
-            raise e1
-    return resp.text or ""
+    
+    for model_aktif, max_coba in DAFTAR_MODEL:
+        for percobaan in range(1, max_coba + 1):
+            try:
+                print(f"[*] Memanggil {model_aktif} (Percobaan {percobaan}/{max_coba})...")
+                client = genai.Client(api_key=API_KEY)
+                resp = client.models.generate_content(model=model_aktif, contents=prompt_teks, config=cfg)
+                print(f"[✓] Berhasil dijawab oleh {model_aktif} pada percobaan ke-{percobaan}!")
+                return resp.text or ""
+            except Exception as e1:
+                err_str = str(e1)
+                if "API_KEY_INVALID" in err_str or "400" in err_str:
+                    try:
+                        client = genai.Client(vertexai=True, api_key=API_KEY)
+                        resp = client.models.generate_content(model=model_aktif, contents=prompt_teks, config=cfg)
+                        print(f"[✓] Berhasil dijawab oleh {model_aktif} (Vertex) pada percobaan ke-{percobaan}!")
+                        return resp.text or ""
+                    except Exception as e2:
+                        err_str = str(e2)
+                
+                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    if percobaan < max_coba:
+                        print(f"[!] {model_aktif} sedang penuh (503/429). Menunggu 5 detik sebelum mencoba lagi...")
+                        time.sleep(5)
+                    else:
+                        print(f"[!] {model_aktif} masih penuh setelah {max_coba} kali percobaan.")
+                else:
+                    print(f"[!] Kendala pada {model_aktif}: {err_str[:120]}...")
+                    break
+                    
+    raise RuntimeError("Model sedang penuh saat ini. Silakan coba beberapa saat lagi.")
 
 def parse_output(teks_respon):
+    """Mengekstrak murni script Python dari respons AI."""
+    skrip_kode = ""
     if "<excel_script>" in teks_respon:
         sisa = teks_respon.split("<excel_script>", 1)[1]
         if "</excel_script>" in sisa:
             skrip_kode = sisa.split("</excel_script>", 1)[0].strip()
-            laporan_sisa = sisa.split("</excel_script>", 1)[1]
         else:
-            if "<laporan>" in sisa:
-                skrip_kode = sisa.split("<laporan>", 1)[0].strip()
-                laporan_sisa = "<laporan>" + sisa.split("<laporan>", 1)[1]
-            else:
-                skrip_kode = sisa.strip()
-                laporan_sisa = ""
-    else:
-        skrip_kode = ""
-        laporan_sisa = teks_respon
-
-    laporan_teks = ""
-    if "<laporan>" in laporan_sisa:
-        laporan_bagian = laporan_sisa.split("<laporan>", 1)[1]
-        if "</laporan>" in laporan_bagian:
-            laporan_teks = laporan_bagian.split("</laporan>", 1)[0].strip()
-        else:
-            laporan_teks = laporan_bagian.strip()
+            skrip_kode = sisa.strip()
 
     if not skrip_kode:
         blok = re.findall(r"```(?:python|py)?[ \t]*\r?\n(.*?)```", teks_respon, re.DOTALL)
         if blok:
-            skrip_kode = max(blok, key=len)
-            
-    return skrip_kode, laporan_teks
+            skrip_kode = max(blok, key=len).strip()
+        else:
+            skrip_kode = teks_respon.strip()
+
+    # Bersihkan sisa markdown fence jika masih menempel di dalam tag
+    skrip_kode = re.sub(r"^```(?:python|py)?\s*", "", skrip_kode)
+    skrip_kode = re.sub(r"\s*```$", "", skrip_kode)
+    return skrip_kode.strip()
+
+def upload_ke_gdrive(file_path):
+    """Fungsi otomatis upload file Excel ke Google Drive menggunakan rclone."""
+    if not shutil.which("rclone"):
+        print("[!] rclone belum terinstal. Lewati proses upload ke Google Drive.")
+        return
+    
+    tujuan_gdrive = f"{RCLONE_REMOTE}:{GDRIVE_FOLDER}"
+    print(f"\n[*] Mengunggah {os.path.basename(file_path)} ke Google Drive ({tujuan_gdrive})...")
+    res = subprocess.run(["rclone", "copy", file_path, tujuan_gdrive], capture_output=True, text=True)
+    if res.returncode == 0:
+        print(f"[✓] BERHASIL diunggah ke Google Drive -> Folder: '{GDRIVE_FOLDER}/{os.path.basename(file_path)}'")
+    else:
+        print(f"[!] Gagal upload ke Google Drive. Pastikan 'rclone config' sudah diset dengan nama '{RCLONE_REMOTE}'.")
+        print(f"    Detail error: {res.stderr.strip()}")
 
 try:
-    print(f"\n[*] Memanggil {MODEL} untuk analisis FP&A...")
+    print("\n[*] Memulai proses pembuatan model Excel FP&A...")
     teks_mentah = minta_respons(soal_user, sys_inst=PROMPT_SISTEM)
     
-    skrip_python, laporan_markdown = parse_output(teks_mentah)
+    skrip_python = parse_output(teks_mentah)
     
     if not skrip_python:
         print("\n[!] Gagal mengekstrak <excel_script> dari respons AI.")
         print("Respons mentah:\n", teks_mentah[:800])
         sys.exit(1)
 
+    with open("_temp_builder.py", "w", encoding="utf-8") as f_temp:
+        f_temp.write(skrip_python)
+
     with tempfile.TemporaryDirectory() as tmp:
         kandidat_tmp = os.path.join(tmp, nama_output)
         
         skrip_final = skrip_python.replace('"__OUT__"', f'r"{kandidat_tmp}"').replace("'__OUT__'", f'r"{kandidat_tmp}"')
+        skrip_final = skrip_final.replace(f'"{nama_output}"', f'r"{kandidat_tmp}"').replace(f"'{nama_output}'", f'r"{kandidat_tmp}"')
         
         if not re.search(r"\.save\(", skrip_final):
             skrip_final += f'\nwb.save(r"{kandidat_tmp}")\n'
@@ -190,25 +265,15 @@ try:
 
         shutil.move(kandidat_tmp, jalan_tujuan)
 
-    print(f"\n[✓] BERHASIL! File Excel tersimpan di: {os.path.abspath(jalan_tujuan)}")
+    print(f"\n[✓] BERHASIL! File Excel lokal tersimpan di: {os.path.abspath(jalan_tujuan)}")
     
-    if laporan_markdown:
-        print("\n" + "="*70)
-        print("   LAPORAN ANALISIS FP&A (DARI TAG <laporan>)")
-        print("="*70)
-        print(laporan_markdown)
-        print("="*70)
-        
-        nama_lap = os.path.splitext(os.path.basename(jalan_tujuan))[0] + "_Report.md"
-        jalan_lap = os.path.join("Hasil_Excel", nama_lap)
-        with open(jalan_lap, "w", encoding="utf-8") as lf:
-            lf.write(laporan_markdown)
-        print(f"[i] Laporan Markdown juga disimpan di: {os.path.abspath(jalan_lap)}")
+    # Otomatis Upload File Excel ke Google Drive
+    upload_ke_gdrive(jalan_tujuan)
 
     sys.exit(0)
 
-except APIError as e:
-    print(f"\n[!] Error API Gemini: {e}")
+except (APIError, RuntimeError) as e:
+    print(f"\n[!] Error: {e}")
     sys.exit(1)
 except subprocess.TimeoutExpired:
     print("\n[!] Timeout saat menjalankan perakit Excel.")
