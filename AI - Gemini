@@ -40,7 +40,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-API_KEY = os.environ.get("GEMINI_API_KEY", "xxxxxxx")
+API_KEY = os.environ.get("GEMINI_API_KEY", "API-xxxxxxxxxx-API")
 if not API_KEY:
     print("\n[!] ERROR: GEMINI_API_KEY belum diatur!")
     sys.exit(1)
@@ -93,12 +93,12 @@ Do NOT output any Markdown report, explanations, or text outside the `<excel_scr
 ---
 
 # 1. STRUCTURE
-- Follow the case study literally. If it specifies the sheets (number, names, order), tables, columns or questions, build exactly that.
-- Answer EVERY question and sub-question in the order asked. Use the question numbering in the section titles.
-- Never add sheets that were not asked for.
-- If the case does not specify a layout, use 2 sheets:
-  1. "Analysis": a dashboard-style review with the sections below.
-  2. "Summary": key figures linked to Analysis, checks, conclusion, recommendation and action items. Name it in the language of the case.
+- **Follow the case study literally. If it specifies the sheets (number, names, order), tables, columns or questions, build exactly that.
+- **Answer EVERY question and sub-question in the order asked. Use the question numbering in the section titles.
+- **Never add sheets that were not asked for.
+- **If the case does not specify a layout, use 2 sheets:
+  * "Analysis": a dashboard-style review with the sections below.
+  * "Summary": key figures linked to Analysis, checks, conclusion, recommendation and action items. Name it in the language of the case.
 
 ---
 
@@ -110,7 +110,7 @@ Do NOT output any Markdown report, explanations, or text outside the `<excel_scr
 - **Dynamic Conditional Allocations & Statuses**:
   * Allocate specific unbudgeted requests dynamically using `IF` formulas comparing the row's category name to the input category cell.
   * Build automated **Status Columns** using nested `IF` formulas (e.g., returning `"OVERRUN - already invoiced"`, `"POTENTIAL OVERRUN (commitment)"`, `"UNDER BUDGET"`, or `"AT BUDGET - fully consumed"` based on actual vs. budget and expected vs. budget).
-- **Reconciliation & Audit Checks**: Under every main table, add a check row in small italic text comparing calculated totals against source figures stated in the case using an `IF` formula that returns `"TIES TO SOURCE ✓"` or `"CHECK ERROR"`.
+- **Reconciliation & Audit Checks**: Under every main table, add a check row in small italic text comparing calculated totals against source figures stated in the case using an `IF` formula that returns `"TIES TO SOURCE âœ“"` or `"CHECK ERROR"`.
 - **Live Formula-Driven Narratives**: In summary sections, sentences containing numbers must be built as live string-concatenated formulas so they update automatically, e.g., `="Total cost rises to "&TEXT(Analysis!C28,"#,##0")&", resulting in a margin gap."`
 - **Deep Analytical Commentary ("The So What")**: Include a wrapped-text commentary/clarification column per row or metric providing case-specific insights: what the number means, key risks, what must be verified before closure, largest and highest-percentage drivers, scenario comparisons, sensitivities, and comparisons against targets/thresholds. State clear decisions and conditions.
 
@@ -148,7 +148,7 @@ def minta_respons(prompt_teks, sys_inst=None):
                 print(f"[*] Memanggil {model_aktif} (Percobaan {percobaan}/{max_coba})...")
                 client = genai.Client(api_key=API_KEY)
                 resp = client.models.generate_content(model=model_aktif, contents=prompt_teks, config=cfg)
-                print(f"[✓] Berhasil dijawab oleh {model_aktif} pada percobaan ke-{percobaan}!")
+                print(f"[âœ“] Berhasil dijawab oleh {model_aktif} pada percobaan ke-{percobaan}!")
                 return resp.text or ""
             except Exception as e1:
                 err_str = str(e1)
@@ -156,7 +156,7 @@ def minta_respons(prompt_teks, sys_inst=None):
                     try:
                         client = genai.Client(vertexai=True, api_key=API_KEY)
                         resp = client.models.generate_content(model=model_aktif, contents=prompt_teks, config=cfg)
-                        print(f"[✓] Berhasil dijawab oleh {model_aktif} (Vertex) pada percobaan ke-{percobaan}!")
+                        print(f"[âœ“] Berhasil dijawab oleh {model_aktif} (Vertex) pada percobaan ke-{percobaan}!")
                         return resp.text or ""
                     except Exception as e2:
                         err_str = str(e2)
@@ -205,7 +205,7 @@ def upload_ke_gdrive(file_path):
     print(f"\n[*] Mengunggah {os.path.basename(file_path)} ke Google Drive ({tujuan_gdrive})...")
     res = subprocess.run(["rclone", "copy", file_path, tujuan_gdrive], capture_output=True, text=True)
     if res.returncode == 0:
-        print(f"[✓] BERHASIL diunggah ke Google Drive -> Folder: '{GDRIVE_FOLDER}/{os.path.basename(file_path)}'")
+        print(f"[âœ“] BERHASIL diunggah ke Google Drive -> Folder: '{GDRIVE_FOLDER}/{os.path.basename(file_path)}'")
     else:
         print(f"[!] Gagal upload ke Google Drive. Pastikan 'rclone config' sudah diset dengan nama '{RCLONE_REMOTE}'.")
         print(f"    Detail error: {res.stderr.strip()}")
@@ -260,7 +260,7 @@ try:
 
         shutil.move(kandidat_tmp, jalan_tujuan)
 
-    print(f"\n[✓] BERHASIL! File Excel lokal tersimpan di: {os.path.abspath(jalan_tujuan)}")
+    print(f"\n[âœ“] BERHASIL! File Excel lokal tersimpan di: {os.path.abspath(jalan_tujuan)}")
     
     # Otomatis Upload File Excel ke Google Drive
     upload_ke_gdrive(jalan_tujuan)
@@ -273,6 +273,7 @@ except (APIError, RuntimeError) as e:
 except subprocess.TimeoutExpired:
     print("\n[!] Timeout saat menjalankan perakit Excel.")
     sys.exit(1)
+
 EOF
 
 chmod +x analisis_excel.py
