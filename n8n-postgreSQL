@@ -27,7 +27,7 @@ SETUP_NGINX="true"
 SECURE_COOKIE="false"         # False agar login via IP lokal HTTP tidak terblokir
 
 # Token Cloudflare Tunnel
-CF_TOKEN="eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9"
+CF_TOKEN=
 # ---------------------------------------------------------------------
 
 echo "=================================================="
