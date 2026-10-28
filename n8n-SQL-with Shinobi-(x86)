@@ -100,7 +100,6 @@ rm -f /tmp/cloudflared.deb
 
 # Pasang ulang service tunnel dengan token
 cloudflared service uninstall 2>/dev/null || true
-cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 systemctl restart cloudflared 2>/dev/null || true
 
 echo "=== 6. Memulai Ulang n8n di PM2 dengan Konfigurasi Baru ==="
