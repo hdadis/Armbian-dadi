@@ -108,7 +108,6 @@ echo "=== 7. Menginstal Cloudflared ==="
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/hdadis/Armbian-dadi/refs/heads/main/Cloudflared)"
 
 cloudflared service uninstall 2>/dev/null || true
-cloudflared service install eyJhIjoiZDY4N2VkZDY3OWQ0MjI3YTQ5MjFkZjBhYjk4MzgwYTEiLCJ0IjoiNTRhNDA2MzgtODM4Mi00ODY3LWE1YWEtOTI0MzVkMmMxNWI2IiwicyI6IlpHRXpOV0l6TlRrdE9EUTJZUzAwTURNM0xUbG1ZbUV0WmpjME1UZGhZMkk0WTJVMyJ9
 
 echo "=== 8. Menjalankan Shinobi & n8n secara Bersamaan di PM2 ==="
 pm2 uninstall pm2-logrotate 2>/dev/null || true
