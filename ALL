@@ -32,4 +32,13 @@ sudo apt autoremove -y
 npm cache clean --force
 df -h /
 
+cd ~/excel-bot
+source venv/bin/activate
+python3 claude_excel.py
+
+nano analisis_excel.py
+source gemini_env/bin/activate
+python3 analisis_excel.py
+
+
 echo "Instalasi selesai!"
