@@ -50,7 +50,7 @@ MODEL = os.environ.get("EXCEL_MODEL", "gemini-3.6-flash")
 print("=" * 70)
 print("   GEMINI ADVANCED FP&A BUILDER & REPORT GENERATOR")
 print("=" * 70)
-print("Paste soal/kasus Anda, lalu ketik SELESAI di baris baru dan tekan ENTER:")
+print("Paste soal/kasus Anda, lalu ketik X di baris baru dan tekan ENTER:")
 print("-" * 70)
 
 baris_soal = []
@@ -59,7 +59,7 @@ while True:
         baris = input()
     except EOFError:
         break
-    if baris.strip().upper() == "x":
+    if baris.strip().upper() == "X":
         break
     baris_soal.append(baris)
 
