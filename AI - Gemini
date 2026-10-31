@@ -40,23 +40,107 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-API_KEY = os.environ.get("GEMINI_API_KEY", "API-xxxxxxxxxx-API")
-if not API_KEY:
-    print("\n[!] ERROR: GEMINI_API_KEY belum diatur!")
-    sys.exit(1)
-
-# Konfigurasi Nama Remote rclone & Folder Tujuan di Google Drive
-RCLONE_REMOTE = os.environ.get("RCLONE_REMOTE", "gdrive")
-GDRIVE_FOLDER = os.environ.get("GDRIVE_FOLDER", "Hasil_Excel")
-
-DAFTAR_MODEL = [
-    ("gemini-3.8-flash", 7),
+# Daftar 6 API Key Gemini (akan berputar dari 1 -> 6 -> balik ke 1 jika limit)
+DAFTAR_API_KEYS = [
+    os.environ.get("GEMINI_KEY_1", "Hayook di isi"),
+    os.environ.get("GEMINI_KEY_2", "Hayook di isi"),
+    os.environ.get("GEMINI_KEY_3", "Hayook di isi"),
+    os.environ.get("GEMINI_KEY_4", "Hayook di isi"),
+    os.environ.get("GEMINI_KEY_5", "Hayook di isi"),
+    os.environ.get("GEMINI_KEY_6", "Hayook di isi"),
 ]
 
+# Filter key yang belum diisi agar tidak memicu error invalid key
+DAFTAR_API_KEYS = [k for k in DAFTAR_API_KEYS if k and not k.startswith("MASUKKAN_KEY_")]
+
+if not DAFTAR_API_KEYS:
+    print("\n[!] ERROR: Tidak ada API Key Gemini yang valid!")
+    sys.exit(1)
+
+TARGET_DIR = "/mnt/External/Downloads/IDM"
+NAMA_MODEL = "gemini-3.7-flash"
+
+class GeminiRotator:
+    def __init__(self, api_keys: list[str]):
+        self.api_keys = api_keys
+        self.total_keys = len(api_keys)
+        self.indeks_aktif = 0
+
+    @property
+    def key_aktif(self) -> str:
+        return self.api_keys[self.indeks_aktif]
+
+    def geser_ke_key_berikutnya(self):
+        self.indeks_aktif = (self.indeks_aktif + 1) % self.total_keys
+        print(f"[*] Rotasi: Berpindah ke API Key urutan ke-{self.indeks_aktif + 1}")
+
+    def generate_content(
+        self,
+        prompt: str,
+        config: types.GenerateContentConfig | None = None,
+        maks_siklus: int = 5,
+        jeda_siklus: int = 10,
+    ) -> str:
+        total_percobaan = self.total_keys * maks_siklus
+        percobaan_dalam_siklus = 0
+
+        for _ in range(total_percobaan):
+            key = self.key_aktif
+            print(f"[*] Mengirim permintaan menggunakan Key urutan ke-{self.indeks_aktif + 1}...")
+
+            try:
+                client = genai.Client(api_key=key)
+                response = client.models.generate_content(
+                    model=NAMA_MODEL,
+                    contents=prompt,
+                    config=config,
+                )
+                print(f"[âœ“] Berhasil direspons menggunakan Key urutan ke-{self.indeks_aktif + 1}!")
+                return response.text or ""
+
+            except Exception as e:
+                err_str = str(e)
+                err_upper = err_str.upper()
+
+                # Coba fallback ke Vertex AI jika API key bertipe service/vertex
+                if "API_KEY_INVALID" in err_upper or "400" in err_upper:
+                    try:
+                        client = genai.Client(vertexai=True, api_key=key)
+                        response = client.models.generate_content(
+                            model=NAMA_MODEL, contents=prompt, config=config
+                        )
+                        print(f"[âœ“] Berhasil direspons menggunakan Key urutan ke-{self.indeks_aktif + 1} (Vertex)!")
+                        return response.text or ""
+                    except Exception as e2:
+                        err_str = str(e2)
+                        err_upper = err_str.upper()
+
+                # Cek apakah limit/kuota habis (429, RESOURCE_EXHAUSTED, 503 UNAVAILABLE)
+                is_quota_or_busy = any(
+                    x in err_upper for x in ["429", "RESOURCE_EXHAUSTED", "QUOTA", "503", "UNAVAILABLE"]
+                )
+
+                if is_quota_or_busy:
+                    print(f"[!] Limit/Padat pada Key urutan ke-{self.indeks_aktif + 1}: {err_str[:90]}...")
+                    self.geser_ke_key_berikutnya()
+                    percobaan_dalam_siklus += 1
+
+                    # Jika seluruh daftar key sudah dicoba penuh dalam satu siklus
+                    if percobaan_dalam_siklus >= self.total_keys:
+                        print(f"[!] Seluruh ({self.total_keys}) API Key sedang limit/penuh. Menunggu {jeda_siklus} detik sebelum siklus ulang...")
+                        time.sleep(jeda_siklus)
+                        percobaan_dalam_siklus = 0
+                else:
+                    print(f"[!] Kendala non-kuota pada Key ke-{self.indeks_aktif + 1}: {err_str[:120]}")
+                    raise e
+
+        raise RuntimeError(f"Gagal memproses permintaan setelah {maks_siklus} putaran rotasi penuh.")
+
 print("=" * 70)
-print("   GEMINI ADVANCED FP&A EXCEL BUILDER (+GDRIVE)")
+print("       GEMINI ADVANCED FP&A EXCEL BUILDER (KEY ROTATION)")
 print("=" * 70)
-print("Paste soal/kasus Anda, lalu ketik SELESAI di baris baru dan tekan ENTER:")
+print(f"[*] Jumlah API Key aktif: {len(DAFTAR_API_KEYS)}")
+print("Paste soal/kasus Anda, lalu ketik X di baris baru dan tekan ENTER:")
 print("-" * 70)
 
 baris_soal = []
@@ -65,7 +149,7 @@ while True:
         baris = input()
     except EOFError:
         break
-    if baris.strip().upper() == "SELESAI":
+    if baris.strip().upper() == "X":
         break
     baris_soal.append(baris)
 
@@ -77,7 +161,7 @@ if not soal_user:
 nama_output = "laporan.xlsx"
 print(f"\n[*] Target file output: {nama_output}")
 
-PROMPT_SISTEM = f"""You are a Senior Finance Analyst (FP&A, Accounting, Corporate Finance) and an expert Python/`openpyxl` developer.
+PROMPT_SISTEM = f"""You are a Manager Finance Analyst (FP&A, Accounting, Corporate Finance) and an expert Python/`openpyxl` developer.
 
 # TASK & OUTPUT FORMAT
 Read the business case study below and answer it fully inside an Excel workbook. If a completed written analysis is also provided, use it as the strict source of truth: all Excel numbers, logic, and structures must match the written analysis exactly.
@@ -135,46 +219,7 @@ Do NOT output any Markdown report, explanations, or text outside the `<excel_scr
 - Never truncate the code. The script must be 100% complete and executable out of the box, ending with `wb.save("__OUT__")`.
 """
 
-def minta_respons(prompt_teks, sys_inst=None):
-    cfg = types.GenerateContentConfig(
-        system_instruction=sys_inst,
-        max_output_tokens=32000,
-        temperature=0.2,
-    )
-    
-    for model_aktif, max_coba in DAFTAR_MODEL:
-        for percobaan in range(1, max_coba + 1):
-            try:
-                print(f"[*] Memanggil {model_aktif} (Percobaan {percobaan}/{max_coba})...")
-                client = genai.Client(api_key=API_KEY)
-                resp = client.models.generate_content(model=model_aktif, contents=prompt_teks, config=cfg)
-                print(f"[âœ“] Berhasil dijawab oleh {model_aktif} pada percobaan ke-{percobaan}!")
-                return resp.text or ""
-            except Exception as e1:
-                err_str = str(e1)
-                if "API_KEY_INVALID" in err_str or "400" in err_str:
-                    try:
-                        client = genai.Client(vertexai=True, api_key=API_KEY)
-                        resp = client.models.generate_content(model=model_aktif, contents=prompt_teks, config=cfg)
-                        print(f"[âœ“] Berhasil dijawab oleh {model_aktif} (Vertex) pada percobaan ke-{percobaan}!")
-                        return resp.text or ""
-                    except Exception as e2:
-                        err_str = str(e2)
-                
-                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    if percobaan < max_coba:
-                        print(f"[!] {model_aktif} sedang penuh (503/429). Menunggu 5 detik sebelum mencoba lagi...")
-                        time.sleep(5)
-                    else:
-                        print(f"[!] {model_aktif} masih penuh setelah {max_coba} kali percobaan.")
-                else:
-                    print(f"[!] Kendala pada {model_aktif}: {err_str[:120]}...")
-                    break
-                    
-    raise RuntimeError("Model sedang penuh saat ini. Silakan coba beberapa saat lagi.")
-
 def parse_output(teks_respon):
-    """Mengekstrak murni script Python dari respons AI."""
     skrip_kode = ""
     if "<excel_script>" in teks_respon:
         sisa = teks_respon.split("<excel_script>", 1)[1]
@@ -190,32 +235,23 @@ def parse_output(teks_respon):
         else:
             skrip_kode = teks_respon.strip()
 
-    # Bersihkan sisa markdown fence jika masih menempel di dalam tag
     skrip_kode = re.sub(r"^```(?:python|py)?\s*", "", skrip_kode)
     skrip_kode = re.sub(r"\s*```$", "", skrip_kode)
     return skrip_kode.strip()
 
-def upload_ke_gdrive(file_path):
-    """Fungsi otomatis upload file Excel ke Google Drive menggunakan rclone."""
-    if not shutil.which("rclone"):
-        print("[!] rclone belum terinstal. Lewati proses upload ke Google Drive.")
-        return
-    
-    tujuan_gdrive = f"{RCLONE_REMOTE}:{GDRIVE_FOLDER}"
-    print(f"\n[*] Mengunggah {os.path.basename(file_path)} ke Google Drive ({tujuan_gdrive})...")
-    res = subprocess.run(["rclone", "copy", file_path, tujuan_gdrive], capture_output=True, text=True)
-    if res.returncode == 0:
-        print(f"[âœ“] BERHASIL diunggah ke Google Drive -> Folder: '{GDRIVE_FOLDER}/{os.path.basename(file_path)}'")
-    else:
-        print(f"[!] Gagal upload ke Google Drive. Pastikan 'rclone config' sudah diset dengan nama '{RCLONE_REMOTE}'.")
-        print(f"    Detail error: {res.stderr.strip()}")
-
 try:
-    print("\n[*] Memulai proses pembuatan model Excel FP&A...")
-    teks_mentah = minta_respons(soal_user, sys_inst=PROMPT_SISTEM)
+    print("\n[*] Memulai proses perakitan prompt dan permintaan ke Gemini...")
+    rotator = GeminiRotator(DAFTAR_API_KEYS)
     
+    cfg = types.GenerateContentConfig(
+        system_instruction=PROMPT_SISTEM,
+        max_output_tokens=32000,
+        temperature=0.2,
+    )
+
+    teks_mentah = rotator.generate_content(prompt=soal_user, config=cfg)
     skrip_python = parse_output(teks_mentah)
-    
+
     if not skrip_python:
         print("\n[!] Gagal mengekstrak <excel_script> dari respons AI.")
         print("Respons mentah:\n", teks_mentah[:800])
@@ -226,10 +262,10 @@ try:
 
     with tempfile.TemporaryDirectory() as tmp:
         kandidat_tmp = os.path.join(tmp, nama_output)
-        
+
         skrip_final = skrip_python.replace('"__OUT__"', f'r"{kandidat_tmp}"').replace("'__OUT__'", f'r"{kandidat_tmp}"')
         skrip_final = skrip_final.replace(f'"{nama_output}"', f'r"{kandidat_tmp}"').replace(f"'{nama_output}'", f'r"{kandidat_tmp}"')
-        
+
         if not re.search(r"\.save\(", skrip_final):
             skrip_final += f'\nwb.save(r"{kandidat_tmp}")\n'
 
@@ -237,7 +273,7 @@ try:
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(skrip_final)
 
-        print("[*] Menjalankan script openpyxl untuk merakit spreadsheet...")
+        print("[*] Menjalankan engine openpyxl untuk menyusun spreadsheet...")
         hasil = subprocess.run(
             [sys.executable, script_path],
             capture_output=True, text=True, timeout=180, cwd=tmp
@@ -245,27 +281,22 @@ try:
 
         if not os.path.exists(kandidat_tmp):
             err = (hasil.stderr or hasil.stdout or "File output tidak terbentuk.").strip()
-            print("\n[!] Script Python gagal. Error:\n" + err[-1500:])
+            print("\n[!] Script perakit Excel gagal. Error:\n" + err[-1500:])
             sys.exit(1)
 
-target_dir = "/mnt/External/Downloads/IDM"
-        os.makedirs(target_dir, exist_ok=True)
-        
-        jalan_tujuan = os.path.join(target_dir, nama_output)
+        os.makedirs(TARGET_DIR, exist_ok=True)
+
+        jalan_tujuan = os.path.join(TARGET_DIR, nama_output)
         if os.path.exists(jalan_tujuan):
             dasar, ext = os.path.splitext(nama_output)
             i = 1
-            while os.path.exists(os.path.join(target_dir, f"{dasar}_{i}{ext}")):
+            while os.path.exists(os.path.join(TARGET_DIR, f"{dasar}_{i}{ext}")):
                 i += 1
-            jalan_tujuan = os.path.join(target_dir, f"{dasar}_{i}{ext}")
+            jalan_tujuan = os.path.join(TARGET_DIR, f"{dasar}_{i}{ext}")
 
         shutil.move(kandidat_tmp, jalan_tujuan)
 
-    print(f"\n[âœ“] BERHASIL! File Excel lokal tersimpan di: {os.path.abspath(jalan_tujuan)}")
-    
-    # Otomatis Upload File Excel ke Google Drive
-    upload_ke_gdrive(jalan_tujuan)
-
+    print(f"\n[âœ“] SELESAI! File Excel tersimpan di: {os.path.abspath(jalan_tujuan)}")
     sys.exit(0)
 
 except (APIError, RuntimeError) as e:
