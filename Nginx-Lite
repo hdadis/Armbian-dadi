@@ -103,8 +103,8 @@ CONFIG_PATH="/etc/nginx/sites-available/default"
 
 cat << EOF > "$CONFIG_PATH"
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
+    listen 8282 default_server;
+    listen [::]:8282 default_server;
 
     root $FOLDER_WEB;
     index index.html index.htm;
