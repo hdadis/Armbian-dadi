@@ -248,15 +248,16 @@ try:
             print("\n[!] Script Python gagal. Error:\n" + err[-1500:])
             sys.exit(1)
 
-        os.makedirs("Hasil_Excel", exist_ok=True)
+target_dir = "/mnt/External/Downloads/IDM"
+        os.makedirs(target_dir, exist_ok=True)
         
-        jalan_tujuan = os.path.join("Hasil_Excel", nama_output)
+        jalan_tujuan = os.path.join(target_dir, nama_output)
         if os.path.exists(jalan_tujuan):
             dasar, ext = os.path.splitext(nama_output)
             i = 1
-            while os.path.exists(os.path.join("Hasil_Excel", f"{dasar}_{i}{ext}")):
+            while os.path.exists(os.path.join(target_dir, f"{dasar}_{i}{ext}")):
                 i += 1
-            jalan_tujuan = os.path.join("Hasil_Excel", f"{dasar}_{i}{ext}")
+            jalan_tujuan = os.path.join(target_dir, f"{dasar}_{i}{ext}")
 
         shutil.move(kandidat_tmp, jalan_tujuan)
 
