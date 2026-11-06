@@ -1,0 +1,105 @@
+cat << 'EOF' > install.sh
+#!/bin/bash
+set -e
+
+PORT=8085
+WEB_DIR="/var/www/mario-nes"
+NGINX_CONF="/etc/nginx/sites-available/mario-nes"
+
+echo "=== Memulai Instalasi Super Mario Bros Web (EmulatorJS) ==="
+
+# 1. Pastikan curl dan nginx terpasang
+echo "[1/5] Mengecek dependensi (nginx, curl)..."
+sudo apt update -qq
+sudo apt install -y curl nginx
+
+# 2. Buat folder web
+echo "[2/5] Menyiapkan direktori $WEB_DIR..."
+sudo mkdir -p "$WEB_DIR"
+
+# 3. Unduh ROM Super Mario Bros (NES)
+echo "[3/5] Mengunduh file ROM Super Mario Bros..."
+sudo curl -sSL -o "$WEB_DIR/mario.nes" "https://raw.githubusercontent.com/bfirsh/jsnes/master/roms/Super_mario_brothers.nes"
+
+# 4. Buat file index.html EmulatorJS
+echo "[4/5] Membuat web player index.html..."
+sudo tee "$WEB_DIR/index.html" > /dev/null << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Mario Bros - HG680P</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #game {
+            width: 100%;
+            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="game"></div>
+    <script>
+        EJS_player = '#game';
+        EJS_core = 'nes';
+        EJS_gameUrl = 'mario.nes';
+        EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+        EJS_startOnLoaded = true;
+    </script>
+    <script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
+</body>
+</html>
+HTMLEOF
+
+# Berikan izin akses folder ke www-data
+sudo chown -R www-data:www-data "$WEB_DIR"
+sudo chmod -R 755 "$WEB_DIR"
+
+# 5. Konfigurasi Nginx
+echo "[5/5] Mengonfigurasi Nginx di port $PORT..."
+sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
+server {
+    listen $PORT;
+    server_name _;
+
+    root $WEB_DIR;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+NGINXEOF
+
+# Enable site jika belum
+if [ ! -f /etc/nginx/sites-enabled/mario-nes ]; then
+    sudo ln -s "$NGINX_CONF" /etc/nginx/sites-enabled/
+fi
+
+# Test dan reload Nginx
+sudo nginx -t
+sudo systemctl reload nginx
+
+# Dapatkan IP lokal STB
+LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+echo ""
+echo "=========================================================="
+echo " INSTALASI BERHASIL!"
+echo " Buka browser di HP / Laptop pada jaringan yang sama:"
+echo " URL: http://$LOCAL_IP:$PORT"
+echo "=========================================================="
+EOF
