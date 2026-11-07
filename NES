@@ -1,76 +1,161 @@
-cat << 'EOF' > install.sh
 #!/bin/bash
 set -e
 
-PORT=8085
-WEB_DIR="/var/www/mario-nes"
-NGINX_CONF="/etc/nginx/sites-available/mario-nes"
+# Pastikan script dijalankan sebagai root (administrator)
+if [ "$EUID" -ne 0 ]; then
+  echo "Harap jalankan script ini sebagai root (gunakan sudo)"
+  exit 1
+fi
 
-echo "=== Memulai Instalasi Super Mario Bros Web (EmulatorJS) ==="
+PORT=8085
+WEB_DIR="/var/www/gaming"
+ROM_SRC="/mnt/External/Downloads/IDM"
+ROM_DIR="$WEB_DIR/roms"
+NGINX_CONF="/etc/nginx/sites-available/gaming"
+
+echo "=== Memulai Instalasi & Pembaruan Server Gaming Retro (HG680P) ==="
 
 # 1. Pastikan curl dan nginx terpasang
-echo "[1/5] Mengecek dependensi (nginx, curl)..."
-sudo apt update -qq
-sudo apt install -y curl nginx
+echo "[1/5] Mengecek dependensi sistem (nginx, curl)..."
+apt update -qq
+apt install -y curl nginx
 
-# 2. Buat folder web
-echo "[2/5] Menyiapkan direktori $WEB_DIR..."
-sudo mkdir -p "$WEB_DIR"
+# 2. Buat folder web utama
+echo "[2/5] Menyiapkan direktori web $WEB_DIR..."
+mkdir -p "$WEB_DIR"
 
-# 3. Unduh ROM Super Mario Bros (NES)
-echo "[3/5] Mengunduh file ROM Super Mario Bros..."
-sudo curl -sSL -o "$WEB_DIR/mario.nes" "https://raw.githubusercontent.com/bfirsh/jsnes/master/roms/Super_mario_brothers.nes"
+# 3. Hubungkan folder ROM eksternal via symlink ke /var/www/gaming/roms
+echo "[3/5] Menghubungkan direktori ROM dari $ROM_SRC..."
+if [ -d "$ROM_SRC" ]; then
+    mkdir -p "$ROM_SRC"
+    rm -rf "$ROM_DIR"
+    ln -s "$ROM_SRC" "$ROM_DIR"
+else
+    echo "[INFO] Folder eksternal belum ada, membuat folder lokal..."
+    mkdir -p "$ROM_DIR"
+fi
 
-# 4. Buat file index.html EmulatorJS
-echo "[4/5] Membuat web player index.html..."
-sudo tee "$WEB_DIR/index.html" > /dev/null << 'HTMLEOF'
+# 4. Pastikan BIOS PS1 ada di dalam folder ROM eksternal
+if [ ! -f "$ROM_SRC/scph5501.bin" ]; then
+    echo "[INFO] Mengunduh file BIOS PS1 (scph5501.bin) ke penyimpanan eksternal..."
+    curl -L --retry 3 -o "$ROM_SRC/scph5501.bin" \
+      "https://github.com/Abdess/retroarch_system/raw/libretro/Sony%20-%20PlayStation/scph5501.bin"
+fi
+
+# 5. Buat file index.html dengan menu lengkap semua game
+echo "[4/5] Membuat file index.html dengan daftar game terbaru..."
+tee "$WEB_DIR/index.html" > /dev/null << 'HTMLEOF'
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Super Mario Bros - HG680P</title>
+    <title>Retro Web Console - HG680P</title>
     <style>
+        * { box-sizing: border-box; }
         body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #000;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #121212; color: #fff; font-family: sans-serif;
+            display: flex; flex-direction: column; overflow: hidden;
         }
-        #game {
-            width: 100%;
-            height: 100%;
-            max-width: 100%;
-            max-height: 100%;
+        #topbar {
+            background: #1f1f1f; padding: 10px 16px; display: flex;
+            align-items: center; gap: 12px; border-bottom: 1px solid #333; z-index: 10;
         }
+        select, button {
+            background: #2a2a2a; color: #fff; border: 1px solid #444;
+            padding: 8px 12px; border-radius: 4px; font-size: 14px; outline: none;
+        }
+        button { cursor: pointer; background: #0070f3; border: none; font-weight: bold; }
+        button:hover { background: #0051b3; }
+        #game-container { flex: 1; width: 100%; height: 100%; position: relative; }
+        #game { width: 100%; height: 100%; }
     </style>
 </head>
 <body>
-    <div id="game"></div>
+
+    <div id="topbar">
+        <label for="gameSelect">Pilih Game:</label>
+        <select id="gameSelect" onchange="this.blur()">
+            <option value="roms/spiderman2enterelectro.chd|psx">Spider-Man 2: Enter Electro (PS1)</option>
+            <option value="roms/streetfightercollection2.chd|psx">Street Fighter Collection 2 (PS1)</option>
+            <option value="roms/streetfighterexplusalpha.chd|psx">Street Fighter EX Plus Alpha (PS1)</option>
+            <option value="roms/streetfighterex2plus.chd|psx">Street Fighter EX2 Plus (PS1)</option>
+            <option value="roms/samuraishodowniiibladesofblood.chd|psx">Samurai Shodown III (PS1)</option>
+            <option value="roms/kingoffighters95the.chd|psx">The King of Fighters '95 (PS1)</option>
+            <option value="roms/dragonballgtfinalbout.chd|psx">Dragon Ball GT: Final Bout (PS1)</option>
+            <option value="roms/kingoffighters99the.chd|psx">The King of Fighters '99 (PS1)</option>
+            <option value="roms/dragonballcultimatebattle22.chd|psx">Dragon Ball Z: Ultimate Battle 22 (PS1)</option>
+            <option value="roms/disneystreasureplanet.chd|psx">Disney's Treasure Planet (PS1)</option>
+            <option value="roms/disneystarzan.chd|psx">Disney's Tarzan (PS1)</option>
+            <option value="roms/ctrcrashteamracing.chd|psx">Crash Team Racing / CTR (PS1)</option>
+            <option value="roms/crashbash.chd|psx">Crash Bash (PS1)</option>
+            <option value="roms/crashbandicoot2cortexstrikesback.chd|psx">Crash Bandicoot 2 (PS1)</option>
+            <option value="roms/crashbandicoot.chd|psx">Crash Bandicoot 1 (PS1)</option>
+            <option value="roms/crashbandicootwarped.chd|psx">Crash Bandicoot 3: Warped (PS1)</option>
+            <option value="roms/harvestmoonbacktonature.chd|psx">Harvest Moon: Back to Nature (PS1)</option>
+            <option value="roms/pepsiman.chd|psx">Pepsiman (PS1)</option>
+            <option value="roms/Legend_of_Legaia.chd|psx">Legend of Legaia (PS1)</option>
+            <option value="roms/Bloody_Roar_2.chd|psx">Bloody Roar 2 (PS1)</option>
+            <option value="roms/Marvel_vs_Capcom.chd|psx">Marvel vs. Capcom (PS1)</option>
+            <option value="roms/007_Theworldisnotenough.chd|psx">007 The World Is Not Enough (PS1)</option>
+            <option value="roms/Super_Mario_Bros_3.nes|nes">Super Mario Bros 3 (NES)</option>
+        </select>
+        <button onclick="gantiGame()">Mainkan</button>
+    </div>
+
+    <div id="game-container">
+        <div id="game"></div>
+    </div>
+
     <script>
-        EJS_player = '#game';
-        EJS_core = 'nes';
-        EJS_gameUrl = 'mario.nes';
-        EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
-        EJS_startOnLoaded = true;
+        const selector = document.getElementById('gameSelect');
+        const params = new URLSearchParams(window.location.search);
+        const idx = params.get('g');
+
+        if (idx !== null && selector.options[idx]) {
+            selector.selectedIndex = idx;
+        }
+
+        function gantiGame() {
+            window.location.search = '?g=' + selector.selectedIndex;
+        }
+
+        const [romUrl, core] = selector.value.split('|');
+
+        window.EJS_player = '#game';
+        window.EJS_core = core;
+        window.EJS_gameUrl = romUrl;
+        window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+        window.EJS_startOnLoaded = true;
+
+        if (core === 'psx') {
+            window.EJS_biosUrl = 'roms/scph5501.bin';
+        }
+
+        window.addEventListener('keydown', function() {
+            if (document.activeElement === selector) {
+                selector.blur();
+            }
+        });
     </script>
     <script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
 </body>
 </html>
 HTMLEOF
 
-# Berikan izin akses folder ke www-data
-sudo chown -R www-data:www-data "$WEB_DIR"
-sudo chmod -R 755 "$WEB_DIR"
+# 6. Atur Hak Akses & Konfigurasi Nginx Baru
+echo "[5/5] Mengonfigurasi Nginx dan izin akses..."
+chown -R www-data:www-data "$WEB_DIR"
+chown -R www-data:www-data "$ROM_SRC"
+chmod -R 755 "$WEB_DIR"
+chmod -R 755 "$ROM_SRC"
 
-# 5. Konfigurasi Nginx
-echo "[5/5] Mengonfigurasi Nginx di port $PORT..."
-sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
+# Hapus konfigurasi lama jika ada, buat yang baru
+rm -f /etc/nginx/sites-enabled/mario-nes
+rm -f /etc/nginx/sites-available/mario-nes
+
+tee "$NGINX_CONF" > /dev/null << NGINXEOF
 server {
     listen $PORT;
     server_name _;
@@ -84,22 +169,19 @@ server {
 }
 NGINXEOF
 
-# Enable site jika belum
-if [ ! -f /etc/nginx/sites-enabled/mario-nes ]; then
-    sudo ln -s "$NGINX_CONF" /etc/nginx/sites-enabled/
+if [ ! -f /etc/nginx/sites-enabled/gaming ]; then
+    ln -s "$NGINX_CONF" /etc/nginx/sites-enabled/
 fi
 
-# Test dan reload Nginx
-sudo nginx -t
-sudo systemctl reload nginx
+nginx -t
+systemctl reload nginx
 
-# Dapatkan IP lokal STB
 LOCAL_IP=$(hostname -I | awk '{print $1}')
 
 echo ""
 echo "=========================================================="
-echo " INSTALASI BERHASIL!"
-echo " Buka browser di HP / Laptop pada jaringan yang sama:"
+echo " INSTALASI & UPDATE SELESAI!"
+echo " Silakan buka browser di HP / Laptop pada jaringan yang sama:"
 echo " URL: http://$LOCAL_IP:$PORT"
+echo " (Jangan lupa tekan Ctrl+F5 di browser untuk refresh cache)"
 echo "=========================================================="
-EOF
