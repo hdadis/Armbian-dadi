@@ -1,346 +1,93 @@
-#!/bin/bash
 #!/usr/bin/env bash
-# sync.sh - Kirim file hasil ke perangkat lain (default 192.168.28.2) dengan PANDUAN.
-# Memeriksa koneksi langkah demi langkah dan menjelaskan salahnya di mana.
-#
-# Pakai:
-#   bash sync.sh setup    -> periksa, atur login, tes, lalu kirim pertama kali
-#   bash sync.sh kirim    -> kirim file baru saja (dipanggil otomatis oleh jalankan.sh)
-#   bash sync.sh status   -> lihat pengaturan sekarang
-#
-# Dua cara kirim (dipilih otomatis):
-#   1) SSH  : login Linux (username+password sekali, lalu pakai kunci)
-#   2) Samba: "berbagi folder" seperti yang dibuka dari Windows/HP
+set -euo pipefail
 
-set -u
+SERVER_IP="192.168.18.2"
+LOCAL_MOUNT="/mnt/IDM_Storage"
+CRED_FILE="/etc/samba/credentials_share"
 
-APP_DIR="${APP_DIR:-$HOME/cari-properti}"
-CONF="$APP_DIR/sync.env"
-HASIL_DIR="$APP_DIR/hasil"
-SENT="$APP_DIR/.terkirim"
-KEY="$HOME/.ssh/id_ed25519_properti"
-CRED="$APP_DIR/.smbcred"
-DEF_HOST="192.168.28.2"
-DEF_DIR="/mnt/External/Downloads/IDM"
+if [[ $EUID -ne 0 ]]; then
+   echo "[ERROR] Skrip ini harus dijalankan sebagai root (gunakan sudo)." >&2
+   exit 1
+fi
 
-if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+echo "[1/5] Menginstal cifs-utils dan smbclient..."
+apt-get update -y
+apt-get install -y cifs-utils smbclient
 
-say() { printf '%s\n' "$*"; }
-tanya() { local j=""; read -r -p "$1" j || true; printf '%s' "${j:-$2}"; }
-port_open() { timeout 4 bash -c "exec 3<>/dev/tcp/$1/$2" >/dev/null 2>&1; }
-ssh_opts() { printf '%s\n' -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new; }
+echo ""
+echo "=== Kredensial Samba Server (${SERVER_IP}) ==="
+read -rp "Username Samba (kosongkan jika Guest/tanpa password): " SAMBA_USER
+SAMBA_PASS=""
+if [[ -n "${SAMBA_USER}" ]]; then
+    read -rsp "Password Samba untuk '${SAMBA_USER}': " SAMBA_PASS
+    echo ""
+fi
 
-# ---------------------------------------------------------------- DIAGNOSA
-diagnosa() {
-  local host="$1"
-  say "==> Memeriksa $host ..."
-  if ping -c 1 -W 2 "$host" >/dev/null 2>&1; then
-    say "   [OK] Perangkat menjawab ping."
-  else
-    say "   [?] Tidak menjawab ping (kadang memang diblokir), lanjut cek layanan..."
-  fi
-  HAS_SSH=0; HAS_SMB=0
-  port_open "$host" 22 && HAS_SSH=1
-  if port_open "$host" 445 || port_open "$host" 139; then HAS_SMB=1; fi
-  if [ "$HAS_SSH" -eq 1 ]; then say "   [OK] SSH aktif (login Linux)."; else say "   [--] SSH tidak aktif."; fi
-  if [ "$HAS_SMB" -eq 1 ]; then say "   [OK] Samba aktif (berbagi folder Windows)."; else say "   [--] Samba tidak aktif."; fi
-  if [ "$HAS_SSH" -eq 0 ] && [ "$HAS_SMB" -eq 0 ]; then
-    say ""
-    say "Perangkat $host TIDAK bisa dihubungi sama sekali. Periksa:"
-    say "  1. Perangkat tujuan menyala dan terhubung ke jaringan yang sama."
-    say "  2. IP-nya benar (cek di router, atau ketik 'ip a' langsung di perangkat itu)."
-    say "  3. Layanan SSH atau Samba di perangkat itu sudah aktif."
-    return 1
-  fi
-  return 0
-}
-
-# ---------------------------------------------------------------- SSH
-cek_ssh_key() { ssh $(ssh_opts) "$2@$1" true >/dev/null 2>&1; }
-
-jelaskan_gagal_ssh() {
-  local out
-  out="$(ssh $(ssh_opts) "$2@$1" true 2>&1 | tail -3)"
-  say ""
-  case "$out" in
-    *"Permission denied"*)
-      say "Login DITOLAK. Kemungkinan penyebab:"
-      say "  1. Username salah (coba 'root', atau nama user yang Anda buat di perangkat itu)."
-      say "  2. Password salah. Ingat: saat mengetik password layar tidak menampilkan apa-apa."
-      say "     Cek juga Caps Lock dan huruf besar/kecil."
-      say "  3. Username/password yang Anda ingat itu mungkin untuk BERBAGI FOLDER (Samba),"
-      say "     bukan untuk SSH. Keduanya bisa berbeda. Script akan mencoba Samba berikutnya."
-      say "  4. Login root lewat password dimatikan di perangkat itu."
-      ;;
-    *"Connection refused"*)
-      say "SSH di $1 belum aktif (ditolak). Aktifkan SSH di perangkat itu, atau pakai Samba." ;;
-    *"timed out"*|*"No route"*|*"unreachable"*)
-      say "Perangkat $1 tidak terjangkau (waktu habis). Cek IP dan jaringan." ;;
-    *"REMOTE HOST IDENTIFICATION"*|*"Host key verification failed"*)
-      say "Perangkat tujuan pernah dipasang ulang sehingga 'sidik jarinya' berubah."
-      say "Jalankan perintah ini lalu ulangi setup:  ssh-keygen -R $1" ;;
-    *)
-      say "Pesan teknis: $out" ;;
-  esac
-  say ""
-}
-
-setup_ssh() {
-  local host="$1" user="" try j dir
-  if ! command -v ssh-copy-id >/dev/null 2>&1; then
-    say "==> Memasang openssh-client..."
-    $SUDO apt-get install -y openssh-client
-  fi
-  mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
-  [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C "cari-properti" -f "$KEY"
-  say ""
-  say "==> Login SSH ke $host"
-  say "  - Armbian yang baru dipasang biasanya: username 'root', password '1234'"
-  say "    (jika sudah pernah diganti, pakai yang Anda buat sendiri)."
-  say "  - Saat mengetik password, layar TIDAK menampilkan apa-apa. Itu normal."
-  for try in 1 2 3; do
-    user="$(tanya "Username [root]: " root)"
-    say "   Ketik password untuk $user@$host lalu tekan Enter:"
-    ssh-copy-id -i "$KEY.pub" -o StrictHostKeyChecking=accept-new "$user@$host"
-    if cek_ssh_key "$host" "$user"; then
-      dir="$(tanya "Folder tujuan di $host [$DEF_DIR]: " "$DEF_DIR")"
-      if ssh $(ssh_opts) "$user@$host" "mkdir -p '$dir' && test -w '$dir'" >/dev/null 2>&1; then
-        SYNC_USER="$user"; SYNC_REMOTE_DIR="$dir"
-        say "   [OK] Login berhasil dan folder $dir bisa ditulis."
-        return 0
-      fi
-      say ""
-      say "Login BERHASIL, tetapi folder $dir tidak bisa dibuat/ditulis. Kemungkinan:"
-      say "  - Drive External belum ter-mount di $host (cek di sana: ls /mnt/External)."
-      say "  - User '$user' tidak punya izin tulis ke folder itu (coba pakai 'root')."
-      return 1
-    fi
-    jelaskan_gagal_ssh "$host" "$user"
-    j="$(tanya "Coba lagi? [Y/n]: " y)"
-    case "$j" in n|N) return 1 ;; esac
-  done
-  return 1
-}
-
-# ---------------------------------------------------------------- SAMBA
-jelaskan_gagal_smb() {
-  say ""
-  case "$1" in
-    *LOGON_FAILURE*)
-      say "Username atau password Samba SALAH."
-      say "  - Password Samba sering BERBEDA dari password login SSH/Linux."
-      say "  - Di perangkat tujuan, password Samba diatur dengan:  sudo smbpasswd -a NAMAUSER" ;;
-    *ACCESS_DENIED*)
-      say "Akses ditolak. Akun ini tidak diizinkan, atau perangkat meminta login (jangan dikosongkan)." ;;
-    *"Connection refused"*|*CONNECTION_REFUSED*)
-      say "Samba di perangkat tujuan menolak koneksi (belum aktif)." ;;
-    *"timed out"*|*UNREACHABLE*|*"No route"*)
-      say "Perangkat tidak terjangkau (waktu habis). Cek IP dan jaringan." ;;
-    *)
-      say "Pesan teknis: $(printf '%s' "$1" | tail -2)" ;;
-  esac
-  say ""
-}
-
-muat_auth() { if [ -f "$CRED" ]; then AUTH=(-A "$CRED"); else AUTH=(-N); fi; }
-
-setup_smb() {
-  local host="$1" user pass try out j i pilih cand
-  if ! command -v smbclient >/dev/null 2>&1; then
-    say "==> Memasang smbclient..."
-    $SUDO apt-get install -y smbclient >/dev/null 2>&1 || $SUDO apt-get install -y smbclient
-  fi
-  say ""
-  say "==> Login berbagi folder (Samba) ke $host"
-  say "  - Pakai username/password yang biasa Anda pakai untuk membuka folder itu"
-  say "    dari Windows atau HP. Ini bisa BERBEDA dari login SSH."
-  say "  - Kosongkan username jika folder itu bisa dibuka TANPA password (guest)."
-  for try in 1 2 3; do
-    user="$(tanya "Username Samba (kosong = tanpa password): " "")"
-    if [ -n "$user" ]; then
-      read -r -s -p "Password Samba untuk $user (tidak tampil saat diketik): " pass || true
-      echo >&2
-      ( umask 077; printf 'username=%s\npassword=%s\n' "$user" "$pass" > "$CRED" )
-    else
-      rm -f "$CRED"
-    fi
-    muat_auth
-    out="$(smbclient -L "//$host" "${AUTH[@]}" -g 2>&1)"
-    if printf '%s\n' "$out" | grep -q '^Disk|'; then break; fi
-    jelaskan_gagal_smb "$out"
-    out=""
-    j="$(tanya "Coba lagi? [Y/n]: " y)"
-    case "$j" in n|N) return 1 ;; esac
-  done
-  [ -n "$out" ] || return 1
-
-  mapfile -t SHARES < <(printf '%s\n' "$out" | awk -F'|' '$1=="Disk" && $2 !~ /\$$/ {print $2}')
-  if [ "${#SHARES[@]}" -eq 0 ]; then
-    say "Login berhasil, tetapi tidak ada folder yang dibagikan di $host."; return 1
-  fi
-  say "   [OK] Login Samba berhasil. Folder yang dibagikan:"
-  i=1; for cand in "${SHARES[@]}"; do say "     $i) $cand"; i=$((i+1)); done
-  if [ "${#SHARES[@]}" -eq 1 ]; then pilih=1; else pilih="$(tanya "Pilih nomor folder [1]: " 1)"; fi
-  [[ "$pilih" =~ ^[0-9]+$ ]] && [ "$pilih" -ge 1 ] || pilih=1
-  SYNC_SMB_SHARE="${SHARES[$((pilih-1))]:-${SHARES[0]}}"
-
-  # cari subfolder tujuan otomatis (padanan /mnt/External/Downloads/IDM)
-  SYNC_SMB_SUBDIR=""; local ketemu=0
-  for cand in "Downloads/IDM" "IDM"; do
-    if smbclient "//$host/$SYNC_SMB_SHARE" "${AUTH[@]}" -c "cd \"$cand\"; pwd" >/dev/null 2>&1; then
-      SYNC_SMB_SUBDIR="$cand"; ketemu=1; break
-    fi
-  done
-  if [ "$ketemu" -eq 0 ]; then
-    case "$(printf '%s' "$SYNC_SMB_SHARE" | tr 'A-Z' 'a-z')" in
-      idm) ketemu=1 ;;
-    esac
-  fi
-  if [ "$ketemu" -eq 0 ]; then
-    say "   Folder 'Downloads/IDM' tidak ditemukan otomatis. Isi folder utama '$SYNC_SMB_SHARE':"
-    smbclient "//$host/$SYNC_SMB_SHARE" "${AUTH[@]}" -c "ls" 2>/dev/null | head -20
-    SYNC_SMB_SUBDIR="$(tanya "Nama subfolder tujuan (kosong = langsung di folder utama): " "")"
-  fi
-  say "   Tujuan: //$host/$SYNC_SMB_SHARE/${SYNC_SMB_SUBDIR}"
-
-  # tes kirim file kecil
-  local tmp="$APP_DIR/.tes_sync.txt" cmd=""
-  echo "tes sync $(date)" > "$tmp"
-  [ -n "$SYNC_SMB_SUBDIR" ] && cmd="cd \"$SYNC_SMB_SUBDIR\"; "
-  cmd+="lcd \"$APP_DIR\"; put .tes_sync.txt; rm .tes_sync.txt"
-  out="$(smbclient "//$host/$SYNC_SMB_SHARE" "${AUTH[@]}" -c "$cmd" 2>&1)"
-  rm -f "$tmp"
-  if printf '%s' "$out" | grep -q 'NT_STATUS'; then
-    say "   GAGAL menulis ke folder itu: $(printf '%s' "$out" | grep NT_STATUS | head -1)"
-    say "   Kemungkinan akun ini hanya boleh MEMBACA (read-only), atau drive belum ter-mount."
-    return 1
-  fi
-  say "   [OK] Tes kirim file berhasil."
-  return 0
-}
-
-# ---------------------------------------------------------------- KONFIGURASI
-tulis_conf() {
-  mkdir -p "$HASIL_DIR"
-  {
-    printf 'SYNC_MODE=%q\n' "$1"
-    printf 'SYNC_HOST=%q\n' "$2"
-    printf 'SYNC_USER=%q\n' "$3"
-    printf 'SYNC_REMOTE_DIR=%q\n' "$4"
-    printf 'SYNC_SMB_SHARE=%q\n' "$5"
-    printf 'SYNC_SMB_SUBDIR=%q\n' "$6"
-    printf 'OUTPUT_DIR=%q\n' "$HASIL_DIR"
-  } > "$CONF"
-  chmod 600 "$CONF"
-}
-
-muat_conf() { set -a; . "$CONF"; set +a; }
-
-pasang_jalankan() {
-  local self; self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-  if [ "$self" != "$(readlink -f "$APP_DIR/sync.sh" 2>/dev/null)" ] && [ -f "$self" ]; then
-    cp "$self" "$APP_DIR/sync.sh"
-  fi
-  chmod +x "$APP_DIR/sync.sh" 2>/dev/null || true
-  cat > "$APP_DIR/jalankan.sh" <<EOF
-#!/usr/bin/env bash
-cd "$APP_DIR"
-if [ -f "$APP_DIR/sync.env" ]; then set -a; . "$APP_DIR/sync.env"; set +a; fi
-"$APP_DIR/venv/bin/python" cari_properti.py >> "$APP_DIR/log.txt" 2>&1
-if [ -f "$APP_DIR/sync.env" ]; then "$APP_DIR/sync.sh" kirim >> "$APP_DIR/log.txt" 2>&1; fi
+mkdir -p /etc/samba
+if [[ -n "${SAMBA_USER}" ]]; then
+    cat <<EOF > "${CRED_FILE}"
+username=${SAMBA_USER}
+password=${SAMBA_PASS}
 EOF
-  chmod +x "$APP_DIR/jalankan.sh"
-}
+    chmod 600 "${CRED_FILE}"
+    MOUNT_AUTH="credentials=${CRED_FILE}"
+    SMB_AUTH="-U ${SAMBA_USER}%${SAMBA_PASS}"
+else
+    MOUNT_AUTH="guest"
+    SMB_AUTH="-N"
+fi
 
-# ---------------------------------------------------------------- KIRIM
-kirim_satu() {
-  local f="$1" b out cmd=""
-  b="$(basename "$f")"
-  case "$SYNC_MODE" in
-    ssh)
-      ssh $(ssh_opts) "$SYNC_USER@$SYNC_HOST" "mkdir -p '$SYNC_REMOTE_DIR'" >/dev/null 2>&1 || return 1
-      scp -q $(ssh_opts) "$f" "$SYNC_USER@$SYNC_HOST:$SYNC_REMOTE_DIR/" >/dev/null 2>&1
-      ;;
-    smb)
-      muat_auth
-      [ -n "$SYNC_SMB_SUBDIR" ] && cmd="cd \"$SYNC_SMB_SUBDIR\"; "
-      cmd+="lcd \"$(dirname "$f")\"; put \"$b\""
-      out="$(smbclient "//$SYNC_HOST/$SYNC_SMB_SHARE" "${AUTH[@]}" -c "$cmd" 2>&1)" || return 1
-      ! printf '%s' "$out" | grep -q 'NT_STATUS'
-      ;;
-    *) return 1 ;;
-  esac
-}
+echo ""
+echo "[2/5] Memeriksa daftar share aktif di ${SERVER_IP}..."
+# Menampilkan share yang tersedia untuk memudahkan pemilihan
+smbclient -L "//${SERVER_IP}" ${SMB_AUTH} -g 2>/dev/null | grep -i "Disk|" | cut -d'|' -f2 || true
 
-cmd_kirim() {
-  if [ ! -f "$CONF" ]; then
-    say "Pengiriman belum diatur. Jalankan:  bash $APP_DIR/sync.sh setup"; return 1
-  fi
-  muat_conf
-  touch "$SENT"
-  shopt -s nullglob
-  local n=0 gagal=0 f b
-  for f in "$HASIL_DIR"/*.xlsx; do
-    b="$(basename "$f")"
-    grep -qxF "$b" "$SENT" && continue
-    if kirim_satu "$f"; then
-      echo "$b" >> "$SENT"; n=$((n+1)); say "[$(date '+%F %T')] Terkirim: $b"
+echo ""
+read -rp "Masukkan nama share di server (contoh: External, Downloads, atau IDM): " SHARE_NAME
+SHARE_NAME="$(echo "${SHARE_NAME}" | sed 's|^/||;s|/$||')"
+
+# Cek apakah share mencakup subfolder
+read -rp "Apakah butuh subfolder di dalam share tersebut? (Ketik subfoldernya, contoh 'Downloads/IDM', atau tekan Enter jika langsung share folder IDM): " SUB_PATH
+SUB_PATH="$(echo "${SUB_PATH}" | sed 's|^/||;s|/$||')"
+
+if [[ -n "${SUB_PATH}" ]]; then
+    FULL_REMOTE="//${SERVER_IP}/${SHARE_NAME}/${SUB_PATH}"
+else
+    FULL_REMOTE="//${SERVER_IP}/${SHARE_NAME}"
+fi
+
+echo "[3/5] Menyiapkan direktori local mount di ${LOCAL_MOUNT}..."
+mkdir -p "${LOCAL_MOUNT}"
+
+echo "[4/5] Mengonfigurasi /etc/fstab..."
+# Parameter:
+# _netdev,nofail: memastikan OS tidak crash saat boot jika server sedang mati/jaringan belum aktif
+# uid=1000,gid=1000,file_mode=0777,dir_mode=0777: hak akses penuh untuk pengguna biasa di Armbian
+MOUNT_OPTS="${MOUNT_AUTH},iocharset=utf8,uid=1000,gid=1000,file_mode=0777,dir_mode=0777,_netdev,nofail,vers=3.0"
+FSTAB_LINE="${FULL_REMOTE} ${LOCAL_MOUNT} cifs ${MOUNT_OPTS} 0 0"
+
+# Bersihkan konfigurasi lama jika pernah didaftarkan
+sed -i "\|${LOCAL_MOUNT}|d" /etc/fstab
+echo "${FSTAB_LINE}" >> /etc/fstab
+
+echo "[5/5] Memuat daemon dan mengeksekusi mounting..."
+systemctl daemon-reload
+mount -a
+
+if mountpoint -q "${LOCAL_MOUNT}"; then
+    echo ""
+    echo "=== Berhasil! Penyimpanan terpasang di ${LOCAL_MOUNT} ==="
+    df -h "${LOCAL_MOUNT}"
+
+    # Verifikasi izin tulis
+    TEST_FILE="${LOCAL_MOUNT}/.test_write_perm"
+    if touch "${TEST_FILE}" 2>/dev/null; then
+        rm -f "${TEST_FILE}"
+        echo "Status Izin Tulis: OK (Bisa membaca dan menulis file)."
     else
-      gagal=$((gagal+1)); say "[$(date '+%F %T')] GAGAL kirim: $b (dicoba lagi saat run berikutnya)"
+        echo "[PERINGATAN] Folder ter-mount, namun izin tulis ditolak. Periksa opsi 'writeable = yes' pada konfigurasi Samba di server."
     fi
-  done
-  say "[$(date '+%F %T')] Sync selesai: $n terkirim, $gagal gagal."
-  [ "$gagal" -eq 0 ]
-}
-
-# ---------------------------------------------------------------- PERINTAH
-cmd_setup() {
-  if [ ! -d "$APP_DIR" ]; then
-    say "Folder $APP_DIR belum ada. Jalankan install.sh dulu."; return 1
-  fi
-  local host berhasil=0
-  SYNC_USER=""; SYNC_REMOTE_DIR=""; SYNC_SMB_SHARE=""; SYNC_SMB_SUBDIR=""
-  host="$(tanya "IP perangkat tujuan [$DEF_HOST]: " "$DEF_HOST")"
-  diagnosa "$host" || return 1
-
-  if [ "$HAS_SSH" -eq 1 ]; then
-    if setup_ssh "$host"; then
-      tulis_conf ssh "$host" "$SYNC_USER" "$SYNC_REMOTE_DIR" "" ""
-      berhasil=1
-    fi
-  fi
-  if [ "$berhasil" -eq 0 ] && [ "$HAS_SMB" -eq 1 ]; then
-    [ "$HAS_SSH" -eq 1 ] && say "" && say "SSH belum berhasil. Mencoba lewat Samba (berbagi folder)..."
-    if setup_smb "$host"; then
-      tulis_conf smb "$host" "" "" "$SYNC_SMB_SHARE" "$SYNC_SMB_SUBDIR"
-      berhasil=1
-    fi
-  fi
-  if [ "$berhasil" -eq 0 ]; then
-    say ""
-    say "BELUM BERHASIL. Langkah yang disarankan:"
-    say "  1. Di perangkat $host, cek login yang benar-benar dipakai (SSH atau berbagi folder)."
-    say "  2. Jika bingung, kirim saya pesan di atas (tanpa password) dan saya bantu baca."
-    say "  3. Ulangi dengan:  bash $0 setup"
-    return 1
-  fi
-  pasang_jalankan
-  say ""
-  say "==> Pengaturan tersimpan. Mengirim file yang sudah ada..."
-  cmd_kirim || true
-  say ""
-  say "SELESAI. Mulai sekarang hasil baru dikirim otomatis tiap script pencari jalan."
-}
-
-cmd_status() {
-  if [ ! -f "$CONF" ]; then say "Belum diatur. Jalankan: bash $0 setup"; return 0; fi
-  say "Pengaturan ($CONF):"; cat "$CONF"
-  say "Sudah terkirim: $(wc -l < "$SENT" 2>/dev/null || echo 0) file"
-}
-
-case "${1:-setup}" in
-  setup)  cmd_setup ;;
-  kirim)  cmd_kirim ;;
-  status) cmd_status ;;
-  *) say "Pakai: bash $0 [setup|kirim|status]"; exit 1 ;;
-esac
+else
+    echo "[ERROR] Mount gagal ke ${FULL_REMOTE}. Periksa kembali nama share dan kredensialnya." >&2
+    exit 1
+fi
