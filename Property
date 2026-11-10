@@ -1,67 +1,75 @@
-#!/bin/bash
 #!/usr/bin/env bash
-# install.sh - Pemasang lengkap "cari properti" untuk Armbian (HG680P / Amlogic S905X)
-# SATU FILE: script pencari (cari_properti.py) sudah ada di dalamnya.
-#
-# Pakai:   bash install.sh
-# Tanpa tanya (opsional):
-#   REMOTE_HOST=192.168.28.2 REMOTE_USER=namauser bash install.sh
+# install.sh - Pemasang pencari properti Armbian terintegrasi Samba CIFS
+# Target simpan langsung: //192.168.18.2/External/Downloads/IDM via /mnt/IDM_Storage
 
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-$HOME/cari-properti}"
-OUTPUT_DIR="${OUTPUT_DIR:-/mnt/External/Downloads/IDM}"
-REMOTE_DIR="${REMOTE_DIR:-/mnt/External/Downloads/IDM}"
-KEY="$HOME/.ssh/id_ed25519_properti"
+LOCAL_MOUNT="/mnt/IDM_Storage"
+SERVER_IP="192.168.18.2"
+SHARE_NAME="External"
+SUB_PATH="Downloads/IDM"
+CRED_FILE="/etc/samba/credentials_share"
+SAMBA_USER="dadi"
+SAMBA_PASS="dadi"
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
 
-echo "==> [1/6] Update paket & pasang Python, cron, ssh"
+echo "==> [1/6] Update paket & pasang dependensi (Python, cifs-utils, cron)"
 $SUDO apt-get update -y
-$SUDO apt-get install -y python3 python3-venv python3-pip ca-certificates cron openssh-client
+$SUDO apt-get install -y python3 python3-venv python3-pip ca-certificates cron cifs-utils
 
-echo "==> [2/6] Tulis script pencari ke $APP_DIR"
+echo "==> [2/6] Setup Storage Jaringan Samba (192.168.18.2)"
+$SUDO mkdir -p /etc/samba
+$SUDO bash -c "cat <<EOF > '${CRED_FILE}'
+username=${SAMBA_USER}
+password=${SAMBA_PASS}
+EOF"
+$SUDO chmod 600 "${CRED_FILE}"
+$SUDO mkdir -p "${LOCAL_MOUNT}"
+
+# Konfigurasi /etc/fstab untuk automount permanen
+REMOTE_TARGET="//${SERVER_IP}/${SHARE_NAME}/${SUB_PATH}"
+MOUNT_OPTS="credentials=${CRED_FILE},iocharset=utf8,uid=$(id -u),gid=$(id -g),file_mode=0777,dir_mode=0777,_netdev,nofail,vers=3.0"
+FSTAB_LINE="${REMOTE_TARGET} ${LOCAL_MOUNT} cifs ${MOUNT_OPTS} 0 0"
+
+$SUDO sed -i "\|${LOCAL_MOUNT}|d" /etc/fstab
+echo "${FSTAB_LINE}" | $SUDO tee -a /etc/fstab > /dev/null
+
+$SUDO systemctl daemon-reload
+$SUDO mount "${LOCAL_MOUNT}" || $SUDO mount -a || true
+
+if mountpoint -q "${LOCAL_MOUNT}"; then
+    echo "    OK: Storage Samba terpasang di ${LOCAL_MOUNT}"
+else
+    echo "    PERINGATAN: Mount gagal. Cek koneksi ke ${SERVER_IP}."
+fi
+
+echo "==> [3/6] Tulis script pencari ke $APP_DIR"
 mkdir -p "$APP_DIR"
 TARGET="$APP_DIR/cari_properti.py"
 TULIS=1
 if [ -f "$TARGET" ]; then
   JAWAB=""
-  read -r -p "   cari_properti.py sudah ada (mungkin sudah Anda edit). Timpa dengan versi baru? [y/N]: " JAWAB || true
+  read -r -p "    cari_properti.py sudah ada. Timpa dengan versi baru? [y/N]: " JAWAB || true
   if [[ "$JAWAB" =~ ^[Yy]$ ]]; then
     cp "$TARGET" "$TARGET.bak.$(date +%Y%m%d%H%M)"
-    echo "   Versi lama dicadangkan."
+    echo "    Versi lama dicadangkan."
   else
     TULIS=0
-    echo "   Dipertahankan (tidak ditimpa)."
+    echo "    Dipertahankan (tidak ditimpa)."
   fi
 fi
+
 if [ "$TULIS" -eq 1 ]; then
 cat > "$TARGET" <<'PY_EMBED_END'
 """
 cari_properti.py - Kumpulkan iklan properti (Depok - Bogor) dan tandai yang
 kemungkinan dijual langsung oleh pemilik.
-
-Cara pakai:
-  1. pip install requests beautifulsoup4 openpyxl
-  2. Isi SOURCES di bawah: CUKUP SATU URL hasil pencarian per situs/area.
-     Halaman 2, 3, dst. dibuka otomatis; iklan dikenali otomatis (mode auto).
-  3. python cari_properti.py
-  Hasil: hasil_properti_TANGGAL_JAM.xlsx (hanya iklan BARU sejak run terakhir),
-  disimpan lokal di OUTPUT_DIR dan/atau dikirim ke REMOTE_HOST lewat scp.
-
-Catatan etika/legal:
-  - Script ini mengecek robots.txt dan memberi jeda antar request.
-  - Nomor telepon hanya diambil jika TAMPIL TERBUKA di halaman iklan
-    (teks, tel:, wa.me) dan hanya untuk iklan "kemungkinan pemilik".
-    Script TIDAK menembus tombol "tampilkan nomor", login, atau captcha.
-    Pakai nomor hanya untuk menghubungi soal iklan itu (UU PDP).
-  - Jika situs memblokir (403/captcha), jangan ditembus. Pakai cara manual.
 """
 import json
 import os
 import re
-import shlex
-import subprocess
 import time
 from datetime import datetime
 import random
@@ -75,12 +83,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 # ---------------------------------------------------------------------------
-# 1. KONFIGURASI - EDIT BAGIAN INI
+# 1. KONFIGURASI
 # ---------------------------------------------------------------------------
-# Buka situs properti, set filter (lokasi Depok/Bogor, jenis, harga), lalu
-# salin SATU URL hasil pencariannya ke "urls". Selesai: script membuka halaman
-# 2, 3, dst. sendiri (maksimal "max_pages") dan mengenali iklan otomatis.
-# Satu URL per pencarian, misalnya satu untuk Depok dan satu untuk Bogor.
 SOURCES = [
     {
         "name": "ContohSitus",
@@ -88,16 +92,7 @@ SOURCES = [
             "https://www.contoh-situs-properti.com/dijual/rumah/depok",
             "https://www.contoh-situs-properti.com/dijual/rumah/bogor",
         ],
-        "max_pages": 10,          # batas jumlah halaman per URL
-
-        # --- SEMUA DI BAWAH INI OPSIONAL (isi hanya jika mode otomatis meleset) ---
-        # "item": "div.listing-card",   # selector pembungkus iklan; default "auto"
-        # "title": "h2", "price": ".price", "location": ".location",
-        # "desc": ".description", "link": "a",
-        # "next": "a.next",             # selector tombol halaman berikutnya
-        # "page_param": "page",         # nama parameter halaman di URL (?page=2)
-        # "agent_badge": ".agent-logo", # lencana/logo agen di kartu iklan
-        # "contact_area": ".contact",   # kotak kontak di halaman detail iklan
+        "max_pages": 10,
     },
 ]
 
@@ -113,7 +108,7 @@ OWNER_HINTS = [
     "tanpa agen", "no agen", "langsung pemilik", "butuh uang", "bu cepat",
     "dijual cepat", "over kredit", "hak milik pribadi",
 ]
-# Pola ciri agen / iklan yang dikelola pihak lain (regex, huruf kecil).
+
 AGENT_HINTS = [
     r"\bagen(?:t)?\b", r"\bbroker\b", r"\bmakelar\b", r"\bcalo\b",
     r"\brealty\b", r"\breal estate\b", r"\bmarketing\b",
@@ -126,37 +121,22 @@ AGENT_HINTS = [
     r"\bera\s+(?:indonesia|properti|property)\b",
     r"\b(?:pt|cv)\.?\s+[a-z]",
 ]
-# Frasa yang justru menandakan pemilik (dibuang dulu sebelum cek agen).
+
 NEGASI_AGEN = re.compile(
     r"\b(?:tanpa|no|non|bukan|anti|tidak\s+(?:lewat|pakai|melalui))\s+"
     r"(?:agen|agent|broker|makelar|perantara|calo)\b"
     r"|\bagen(?:t)?\s+(?:dilarang|jangan|mohon\s+tidak|no)\b"
 )
 
-# --- FILTER ---
-FILTER_KETAT = True   # True = iklan yang ada ciri agen TIDAK dimasukkan ke Excel
-MINIMAL_SKOR = 0      # 0 = boleh "belum jelas" asal tanpa ciri agen
-                      # 1 = wajib ada kata penanda pemilik ("pemilik langsung", dll)
-
-AMBIL_TELEPON = True        # ambil nomor yang tampil terbuka di halaman detail
-DELAY = (3.0, 6.0)          # jeda acak antar request (detik)
+FILTER_KETAT = True
+MINIMAL_SKOR = 0
+AMBIL_TELEPON = True
+DELAY = (3.0, 6.0)
 MAX_ITEMS_PER_PAGE = 100
-# Tujuan file hasil. Dua mode:
-#  a) Lokal : OUTPUT_DIR (default /mnt/External/Downloads/IDM di perangkat ini)
-#  b) Kirim ke komputer lain lewat SSH/scp: isi REMOTE_HOST (+ REMOTE_USER,
-#     REMOTE_DIR). File tetap disimpan juga di folder "hasil" lokal sebagai cadangan.
-# Semua bisa diatur lewat variabel lingkungan (lihat setup_kirim.sh).
-REMOTE_HOST = os.environ.get("REMOTE_HOST", "")            # contoh: 192.168.28.2
-REMOTE_USER = os.environ.get("REMOTE_USER", "")
-REMOTE_DIR = os.environ.get("REMOTE_DIR", "/mnt/External/Downloads/IDM")
-SSH_KEY = os.environ.get("SSH_KEY", "")                    # kosong = kunci default
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR") or (
-    str(Path(__file__).resolve().parent / "hasil") if REMOTE_HOST
-    else "/mnt/External/Downloads/IDM"
-)
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/mnt/IDM_Storage")
 SEEN_FILE = "seen.json"
-PHONES_FILE = "phones.json"   # catatan nomor -> daftar iklan (deteksi agen)
-BATAS_AGEN = 3                # nomor yang muncul di >= segini iklan dianggap agen
+PHONES_FILE = "phones.json"
+BATAS_AGEN = 3
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (personal property research script)",
     "Accept-Language": "id-ID,id;q=0.9",
@@ -166,7 +146,6 @@ HEADERS = {
 # 2. FUNGSI
 # ---------------------------------------------------------------------------
 _robots_cache = {}
-
 
 def boleh_diakses(url):
     host = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
@@ -181,7 +160,6 @@ def boleh_diakses(url):
     rp = _robots_cache[host]
     return True if rp is None else rp.can_fetch(HEADERS["User-Agent"], url)
 
-
 def ambil_halaman(url):
     if not boleh_diakses(url):
         print(f"  [SKIP] robots.txt melarang: {url}")
@@ -192,10 +170,9 @@ def ambil_halaman(url):
         print(f"  [ERROR] {url}: {e}")
         return None
     if r.status_code != 200:
-        print(f"  [GAGAL] HTTP {r.status_code}: {url} (jangan ditembus, coba manual)")
+        print(f"  [GAGAL] HTTP {r.status_code}: {url}")
         return None
     return r.text
-
 
 def teks(node, selector):
     if not selector:
@@ -203,9 +180,7 @@ def teks(node, selector):
     el = node.select_one(selector)
     return el.get_text(" ", strip=True) if el else ""
 
-
 def ada_tanda_agen(teks_):
-    """Kembalikan pola agen yang cocok ('' jika tidak ada)."""
     t = NEGASI_AGEN.sub(" ", (teks_ or "").lower())
     for pola in AGENT_HINTS:
         m = re.search(pola, t)
@@ -213,19 +188,15 @@ def ada_tanda_agen(teks_):
             return m.group(0).strip()
     return ""
 
-
 def skor_pemilik(judul, desc):
     t = f"{judul} {desc}".lower()
     return sum(2 for k in OWNER_HINTS if k in t)
-
 
 def di_area(lokasi, judul, desc):
     t = f"{lokasi} {judul} {desc}".lower()
     return any(k in t for k in AREA_KEYWORDS)
 
-
 HP_REGEX = re.compile(r"(?:\+?62|0)\s*8\d{1,2}[\s.\-]?\d{3,4}[\s.\-]?\d{2,5}")
-
 
 def normalisasi_hp(raw):
     d = re.sub(r"\D", "", raw)
@@ -233,9 +204,7 @@ def normalisasi_hp(raw):
         d = "62" + d[1:]
     return d if d.startswith("628") and 11 <= len(d) <= 14 else ""
 
-
 def cari_telepon(html, area=""):
-    """Ambil nomor HP yang tampil terbuka. area = selector kotak kontak (opsional)."""
     soup = BeautifulSoup(html, "html.parser")
     root = soup.select_one(area) if area else None
     root = root or soup
@@ -253,7 +222,6 @@ def cari_telepon(html, area=""):
                 hasil.append(n)
     return hasil[:3]
 
-
 def tambah_telepon(item, src):
     html = ambil_halaman(item["link"])
     if not html:
@@ -269,13 +237,10 @@ def tambah_telepon(item, src):
         item["telepon"] = ", ".join("+" + n for n in nomor)
         item["wa_link"] = f"https://wa.me/{nomor[0]}"
 
-
 HARGA_RE = re.compile(r"rp\.?\s?\d[\d.,]*\s?(?:juta|jt|miliar|milyar|m|rb|ribu)?\b", re.I)
-
 
 def _teks(el):
     return el.get_text(" ", strip=True)
-
 
 def _link_kartu(node, base_url):
     kand = [node] if node.name == "a" and node.get("href") else []
@@ -287,10 +252,7 @@ def _link_kartu(node, base_url):
             return urljoin(base_url, h)
     return ""
 
-
 def auto_kartu(soup, base_url):
-    """Kenali kartu iklan otomatis: elemen terkecil yang memuat satu harga 'Rp ...'
-    dan satu link. Butuh minimal 3 iklan di halaman agar yakin."""
     kandidat = [t for t in soup.find_all(True)
                 if t.name not in ("script", "style", "head", "html", "body")
                 and len(_teks(t)) <= 40 and HARGA_RE.search(_teks(t))]
@@ -332,7 +294,6 @@ def auto_kartu(soup, base_url):
                       "desc": _teks(cur)[:600], "link": link, "node": cur})
     return hasil
 
-
 def ambil_kartu(soup, src, base_url):
     mode = src.get("item", "auto")
     if mode in ("", "auto"):
@@ -350,10 +311,7 @@ def ambil_kartu(soup, src, base_url):
         })
     return hasil
 
-
 def halaman_berikut(url, html, src):
-    """Cari URL halaman berikutnya: selector 'next' > rel=next > tombol
-    'Berikutnya/Next' > naikkan nomor halaman di URL."""
     soup = BeautifulSoup(html, "html.parser")
     sel = src.get("next", "")
     if sel:
@@ -377,10 +335,7 @@ def halaman_berikut(url, html, src):
     q[param] = str(int(q[param]) + 1) if q.get(param, "").isdigit() else "2"
     return urlunparse(pu._replace(query=urlencode(q)))
 
-
 def iterasi_halaman(start, src):
-    """Hasilkan (url, html) halaman demi halaman sampai max_pages, tidak ada
-    halaman berikutnya, atau halaman gagal dibuka."""
     url, dikunjungi = start, set()
     for n in range(1, int(src.get("max_pages", 10)) + 1):
         if not url or url in dikunjungi:
@@ -394,9 +349,7 @@ def iterasi_halaman(start, src):
         url = halaman_berikut(url, html, src)
         time.sleep(random.uniform(*DELAY))
 
-
 def parse(html, src, base_url):
-    """Kembalikan (iklan di area Depok-Bogor, semua link iklan di halaman)."""
     soup = BeautifulSoup(html, "html.parser")
     hasil, semua = [], set()
     for k in ambil_kartu(soup, src, base_url):
@@ -426,21 +379,17 @@ def parse(html, src, base_url):
         })
     return hasil, semua
 
-
 def muat_seen():
     if Path(SEEN_FILE).exists():
         return set(json.loads(Path(SEEN_FILE).read_text()))
     return set()
-
 
 def muat_phones():
     if Path(PHONES_FILE).exists():
         return json.loads(Path(PHONES_FILE).read_text())
     return {}
 
-
 def tandai_nomor_berulang(item, phones):
-    """Catat nomor; nomor yang sama di banyak iklan = ciri khas agen/broker."""
     if not item["telepon"]:
         item["jml_iklan_nomor"] = ""
         return
@@ -453,36 +402,12 @@ def tandai_nomor_berulang(item, phones):
         item["indikasi"] = "Kemungkinan agen (nomor berulang)"
         item["tanda_agen"] = f"nomor muncul di {len(daftar)} iklan"
 
-
-def kirim_remote(path):
-    """Kirim file ke REMOTE_HOST:REMOTE_DIR lewat scp. Mengembalikan True jika sukses."""
-    if not REMOTE_HOST:
-        return False
-    tujuan = f"{REMOTE_USER}@{REMOTE_HOST}" if REMOTE_USER else REMOTE_HOST
-    opsi = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
-            "-o", "StrictHostKeyChecking=accept-new"]
-    if SSH_KEY:
-        opsi += ["-i", SSH_KEY]
-    try:
-        subprocess.run(["ssh", *opsi, tujuan, f"mkdir -p {shlex.quote(REMOTE_DIR)}"],
-                       check=True, capture_output=True, timeout=60)
-        subprocess.run(["scp", *opsi, str(path), f"{tujuan}:{REMOTE_DIR}/"],
-                       check=True, capture_output=True, timeout=120)
-        print(f"  Terkirim ke {tujuan}:{REMOTE_DIR}/")
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
-        err = getattr(e, "stderr", b"") or b""
-        print(f"  [GAGAL KIRIM] {e.__class__.__name__}: {err.decode(errors='ignore').strip()[:200]}")
-        print(f"  File tetap aman di {path}. Cek SSH dengan: ssh {tujuan}")
-        return False
-
-
 def simpan_excel(rows):
     try:
         Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
         folder = Path(OUTPUT_DIR)
     except OSError as e:
-        print(f"  [PERINGATAN] folder {OUTPUT_DIR} tidak bisa dipakai ({e}); simpan di folder script")
+        print(f"  [PERINGATAN] folder {OUTPUT_DIR} tidak bisa dipakai ({e}); simpan di lokal script")
         folder = Path(".")
     output = folder / f"hasil_properti_{datetime.now():%Y%m%d_%H%M}.xlsx"
     wb = Workbook()
@@ -500,14 +425,12 @@ def simpan_excel(rows):
     wb.save(output)
     return output
 
-
 def alasan_buang(item):
     if FILTER_KETAT and item["tanda_agen"]:
         return item["tanda_agen"]
     if item["skor_pemilik"] < MINIMAL_SKOR:
         return "tanpa penanda pemilik"
     return ""
-
 
 def main():
     seen = muat_seen()
@@ -545,106 +468,46 @@ def main():
     Path(PHONES_FILE).write_text(json.dumps(phones, indent=1))
     if baru:
         output = simpan_excel(baru)
-        kirim_remote(output)
         print(f"\nSelesai: {len(baru)} iklan lolos filter, {dibuang} dibuang -> {output}")
     else:
-        print(f"\nTidak ada iklan lolos filter ({dibuang} dibuang). "
-              "Jika tidak ada iklan terbaca sama sekali, isi selector manual di SOURCES.")
-
+        print(f"\nTidak ada iklan lolos filter ({dibuang} dibuang).")
 
 if __name__ == "__main__":
     main()
 PY_EMBED_END
 fi
 
-echo "==> [3/6] Buat virtualenv & pasang library (ringan untuk ARM)"
+echo "==> [4/6] Buat virtualenv & pasang library"
 python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --upgrade pip
 "$APP_DIR/venv/bin/pip" install requests beautifulsoup4 openpyxl
-
-echo "==> [4/6] Tujuan file hasil"
-REMOTE_ON=0
-if [ -z "${REMOTE_HOST:-}" ]; then
-  J=""
-  read -r -p "   Kirim hasil ke perangkat lain lewat SSH? [y/N]: " J || true
-  if [[ "$J" =~ ^[Yy]$ ]]; then
-    REMOTE_HOST=""
-    read -r -p "   IP/host tujuan [192.168.28.2]: " REMOTE_HOST || true
-    REMOTE_HOST="${REMOTE_HOST:-192.168.28.2}"
-  fi
-fi
-
-if [ -n "${REMOTE_HOST:-}" ]; then
-  if [ -z "${REMOTE_USER:-}" ]; then
-    REMOTE_USER=""
-    read -r -p "   Username SSH di $REMOTE_HOST: " REMOTE_USER || true
-  fi
-  if [ -z "${REMOTE_USER:-}" ]; then
-    echo "   Username kosong, pengiriman dilewati (hasil disimpan lokal)."
-  else
-    mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-    [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -C "cari-properti@$(hostname)" -f "$KEY"
-    echo "   Memasang kunci SSH (password $REMOTE_USER diminta satu kali)..."
-    if ssh-copy-id -i "$KEY.pub" -o StrictHostKeyChecking=accept-new "$REMOTE_USER@$REMOTE_HOST" \
-       && ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE_USER@$REMOTE_HOST" \
-            "mkdir -p '$REMOTE_DIR' && test -w '$REMOTE_DIR'"; then
-      REMOTE_ON=1
-      cat > "$APP_DIR/kirim.env" <<ENVEND
-export REMOTE_HOST="$REMOTE_HOST"
-export REMOTE_USER="$REMOTE_USER"
-export REMOTE_DIR="$REMOTE_DIR"
-export SSH_KEY="$KEY"
-export OUTPUT_DIR="$APP_DIR/hasil"
-ENVEND
-      chmod 600 "$APP_DIR/kirim.env"
-      mkdir -p "$APP_DIR/hasil"
-      echo "   OK: hasil akan dikirim ke $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR (salinan di $APP_DIR/hasil)"
-    else
-      echo "   PERINGATAN: koneksi/folder di $REMOTE_HOST gagal (SSH belum aktif, user salah,"
-      echo "   atau drive belum ter-mount). Hasil disimpan lokal. Jalankan install.sh lagi untuk mencoba ulang."
-    fi
-  fi
-fi
-
-if [ "$REMOTE_ON" -eq 0 ]; then
-  echo "   Simpan lokal di: $OUTPUT_DIR"
-  if ! mkdir -p "$OUTPUT_DIR" 2>/dev/null || [ ! -w "$OUTPUT_DIR" ]; then
-    $SUDO mkdir -p "$OUTPUT_DIR" && $SUDO chown "$(id -un)":"$(id -gn)" "$OUTPUT_DIR" || true
-  fi
-  if [ -w "$OUTPUT_DIR" ]; then
-    echo "   OK, folder bisa ditulis."
-  else
-    echo "   PERINGATAN: $OUTPUT_DIR tidak bisa ditulis (cek apakah drive External sudah ter-mount)."
-  fi
-fi
 
 echo "==> [5/6] Buat perintah jalankan.sh"
 cat > "$APP_DIR/jalankan.sh" <<EOF
 #!/usr/bin/env bash
 cd "$APP_DIR"
-export OUTPUT_DIR="$OUTPUT_DIR"
-[ -f "$APP_DIR/kirim.env" ] && . "$APP_DIR/kirim.env"
+export OUTPUT_DIR="${LOCAL_MOUNT}"
 "$APP_DIR/venv/bin/python" cari_properti.py >> "$APP_DIR/log.txt" 2>&1
 EOF
 chmod +x "$APP_DIR/jalankan.sh"
 
 echo "==> [6/6] Jadwal otomatis (cron)"
 JAM=""
-read -r -p "   Jalankan otomatis tiap hari? Masukkan jam 0-23 (kosong = tidak): " JAM || true
+read -r -p "    Jalankan otomatis tiap hari? Masukkan jam 0-23 (kosong = tidak): " JAM || true
 if [[ "$JAM" =~ ^([0-9]|1[0-9]|2[0-3])$ ]]; then
   ( crontab -l 2>/dev/null | grep -v "$APP_DIR/jalankan.sh" || true
     echo "0 $JAM * * * $APP_DIR/jalankan.sh" ) | crontab -
   $SUDO systemctl enable --now cron >/dev/null 2>&1 || true
-  echo "   Terjadwal tiap hari jam $JAM:00 (zona waktu sistem: $(cat /etc/timezone 2>/dev/null || echo ?))"
+  echo "    Terjadwal tiap hari jam $JAM:00"
 else
-  echo "   Dilewati. Jalankan manual: $APP_DIR/jalankan.sh"
+  echo "    Dilewati. Jalankan manual: $APP_DIR/jalankan.sh"
 fi
 
 cat <<EOF
 
 SELESAI.
-  Folder     : $APP_DIR
-  Edit config: nano $APP_DIR/cari_properti.py   (bagian SOURCES)
-  Tes manual : $APP_DIR/jalankan.sh && tail -20 $APP_DIR/log.txt
-  Hasil Excel: $( [ "$REMOTE_ON" -eq 1 ] && echo "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/ (+ salinan di $APP_DIR/hasil/)" || echo "$OUTPUT_DIR/" )
+  Folder Aplikasi : $APP_DIR
+  Target Simpan   : $LOCAL_MOUNT (tersambung ke //${SERVER_IP}/${SHARE_NAME}/${SUB_PATH})
+  Edit config     : nano $APP_DIR/cari_properti.py (bagian SOURCES)
+  Tes manual      : $APP_DIR/jalankan.sh && tail -20 $APP_DIR/log.txt
 EOF
