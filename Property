@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# install.sh - Pasang cari_properti.py di Armbian (HG680P / Amlogic S905X)
+# Pakai:  bash install.sh
+# Taruh file ini satu folder dengan cari_properti.py
+
+set -euo pipefail
+
+APP_DIR="${APP_DIR:-$HOME/cari-properti}"
+OUTPUT_DIR="${OUTPUT_DIR:-/mnt/External/Downloads/IDM}"
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
+echo "==> [1/5] Update paket & pasang Python"
+$SUDO apt-get update -y
+$SUDO apt-get install -y python3 python3-venv python3-pip ca-certificates cron
+
+echo "==> [2/5] Siapkan folder $APP_DIR"
+mkdir -p "$APP_DIR"
+if [ ! -f "$SRC_DIR/cari_properti.py" ]; then
+  echo "ERROR: cari_properti.py tidak ditemukan di $SRC_DIR"
+  exit 1
+fi
+cp "$SRC_DIR/cari_properti.py" "$APP_DIR/"
+
+echo "==> [3/5] Buat virtualenv & pasang library (tanpa lxml, ringan untuk ARM)"
+python3 -m venv "$APP_DIR/venv"
+"$APP_DIR/venv/bin/pip" install --upgrade pip
+"$APP_DIR/venv/bin/pip" install requests beautifulsoup4 openpyxl
+
+echo "==> Cek folder hasil: $OUTPUT_DIR"
+if ! mkdir -p "$OUTPUT_DIR" 2>/dev/null || [ ! -w "$OUTPUT_DIR" ]; then
+  $SUDO mkdir -p "$OUTPUT_DIR" && $SUDO chown "$(id -un)":"$(id -gn)" "$OUTPUT_DIR" || true
+fi
+if [ -w "$OUTPUT_DIR" ]; then
+  echo "   OK, bisa ditulis."
+else
+  echo "   PERINGATAN: $OUTPUT_DIR tidak bisa ditulis (cek apakah drive External sudah ter-mount)."
+fi
+
+echo "==> [4/5] Buat perintah jalankan.sh"
+cat > "$APP_DIR/jalankan.sh" <<EOF
+#!/usr/bin/env bash
+cd "$APP_DIR"
+export OUTPUT_DIR="$OUTPUT_DIR"
+"$APP_DIR/venv/bin/python" cari_properti.py >> "$APP_DIR/log.txt" 2>&1
+EOF
+chmod +x "$APP_DIR/jalankan.sh"
+
+echo "==> [5/5] Jadwal otomatis (cron)"
+read -r -p "Jalankan otomatis tiap hari? Masukkan jam 0-23 (kosong = tidak): " JAM
+if [[ "$JAM" =~ ^([0-9]|1[0-9]|2[0-3])$ ]]; then
+  ( crontab -l 2>/dev/null | grep -v "$APP_DIR/jalankan.sh" || true
+    echo "0 $JAM * * * $APP_DIR/jalankan.sh" ) | crontab -
+  $SUDO systemctl enable --now cron >/dev/null 2>&1 || true
+  echo "   Terjadwal tiap hari jam $JAM:00 (zona waktu sistem: $(cat /etc/timezone 2>/dev/null || echo ?))"
+else
+  echo "   Dilewati. Jalankan manual: $APP_DIR/jalankan.sh"
+fi
+
+cat <<EOF
+
+SELESAI.
+  Folder     : $APP_DIR
+  Edit config: nano $APP_DIR/cari_properti.py   (bagian SOURCES)
+  Tes manual : cd $APP_DIR && ./venv/bin/python cari_properti.py
+  Jalankan   : $APP_DIR/jalankan.sh      (log di $APP_DIR/log.txt)
+
+  Hasil Excel: $OUTPUT_DIR/hasil_properti_TANGGAL_JAM.xlsx
+EOF
