@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. Parameter Konfigurasi
+SERVER_IP="192.168.18.2"
+SHARE_NAME="External"
+SUB_PATH="Downloads/IDM"
+LOCAL_MOUNT="/mnt/IDM_Storage"
+CRED_FILE="/etc/samba/credentials_share"
+
+# Kredensial Samba Server
+SAMBA_USER="dadi"
+SAMBA_PASS="dadi"
+
+echo "[1/4] Memastikan paket cifs-utils terpasang..."
+apt-get update -y >/dev/null
+apt-get install -y cifs-utils >/dev/null
+
+echo "[2/4] Mengamankan kredensial Samba..."
+mkdir -p /etc/samba
+cat <<EOF > "${CRED_FILE}"
+username=${SAMBA_USER}
+password=${SAMBA_PASS}
+EOF
+chmod 600 "${CRED_FILE}"
+
+echo "[3/4] Menyiapkan titik mount lokal di ${LOCAL_MOUNT}..."
+mkdir -p "${LOCAL_MOUNT}"
+
+echo "[4/4] Memperbarui /etc/fstab..."
+# Menghubungkan langsung ke subfolder Downloads/IDM
+REMOTE_TARGET="//${SERVER_IP}/${SHARE_NAME}/${SUB_PATH}"
+MOUNT_OPTS="credentials=${CRED_FILE},iocharset=utf8,uid=1000,gid=1000,file_mode=0777,dir_mode=0777,_netdev,nofail,vers=3.0"
+FSTAB_LINE="${REMOTE_TARGET} ${LOCAL_MOUNT} cifs ${MOUNT_OPTS} 0 0"
+
+# Bersihkan entri lama jika ada, lalu tulis entri baru
+sed -i "\|${LOCAL_MOUNT}|d" /etc/fstab
+echo "${FSTAB_LINE}" >> /etc/fstab
+
+# Muat ulang systemd dan mount folder
+systemctl daemon-reload
+mount "${LOCAL_MOUNT}" || mount -a
+
+# Verifikasi status mount
+if mountpoint -q "${LOCAL_MOUNT}"; then
+    echo "=== SUKSES ==="
+    echo "Local Path  : ${LOCAL_MOUNT}"
+    echo "Remote Disk : //${SERVER_IP}/${SHARE_NAME}/${SUB_PATH}"
+    df -h "${LOCAL_MOUNT}"
+else
+    echo "[ERROR] Mount gagal diperiksa." >&2
+    exit 1
+fi
