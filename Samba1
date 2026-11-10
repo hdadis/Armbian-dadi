@@ -1,102 +1,145 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script Name   : install_samba_usb.sh
-# Description   : Otomatisasi Instalasi Samba & Auto-mount USB Share
-# Author        : [DADI]
-# Date          : 2026
+# Script: setup_samba_dual_user.sh
+# Akses: User 'dadi' dan 'root' (Full Read/Write)
+# Target: /mnt/External
 # ==============================================================================
 
-# Pastikan skrip dijalankan sebagai root/sudo
 if [ "$EUID" -ne 0 ]; then
-  echo "⚠️ Harap jalankan skrip ini dengan hak akses sudo/root!"
+  echo "[-] Jalankan skrip ini dengan hak akses sudo / root."
   exit 1
 fi
 
-echo "🔄 1. Memperbarui package list dan menginstal Samba..."
-apt install -y samba samba-common-bin
+SHARE_GROUP="sambashare"
+SHARE_USER="dadi"
+MOUNT_POINT="/mnt/External"
+SMB_CONF="/etc/samba/smb.conf"
 
-echo "🔍 2. Mendeteksi penyimpanan USB..."
-# Mencari partisi penyimpanan eksternal (biasanya sdX1, sdX2, dsb. selain disk utama)
-# Menggunakan lsblk untuk memfilter disk yang bertipe partisi dan bukan drive sistem utama jika memungkinkan
-USB_PART=$(lsblk -lo NAME,TYPE,FSTYPE,MOUNTPOINT | grep -E "part" | grep -vE "(/|/boot|/boot/efi)$" | awk '{print $1}' | head -n 1)
+echo "[+] 1. Memperbarui package & menginstal Samba + tool filesystem..."
+apt-get update -y
+apt-get install -y samba samba-common-bin smbclient cifs-utils ntfs-3g exfat-fuse
+
+echo "[+] 2. Menyiapkan grup dan akun sistem..."
+getent group $SHARE_GROUP >/dev/null || groupadd $SHARE_GROUP
+
+if ! id "$SHARE_USER" &>/dev/null; then
+    useradd -M -s /usr/sbin/nologin -g $SHARE_GROUP $SHARE_USER
+else
+    usermod -a -G $SHARE_GROUP $SHARE_USER
+fi
+
+# Tambahkan root ke grup sambashare
+usermod -a -G $SHARE_GROUP root
+
+echo "[+] 3. Mendeteksi penyimpanan eksternal..."
+USB_DEV=$(lsblk -d -o NAME,TRAN | grep usb | awk '{print $1}' | head -n 1)
+
+if [ -z "$USB_DEV" ]; then
+    USB_PART=$(lsblk -ln -o NAME,MOUNTPOINT | grep -v '^sda' | awk '$2=="" {print $1}' | head -n 1)
+else
+    USB_PART=$(lsblk -ln -o NAME /dev/$USB_DEV | grep -E "[0-9]$" | head -n 1)
+fi
 
 if [ -z "$USB_PART" ]; then
-  echo "❌ Tidak ada USB drive atau partisi eksternal kosong yang terdeteksi!"
-  echo "💡 Silakan colokkan USB Anda terlebih dahulu, lalu jalankan ulang skrip."
-  exit 1
+    echo "[-] Gagal mendeteksi partisi storage eksternal. Periksa koneksi disk."
+    exit 1
 fi
 
-USB_DEV="/dev/$USB_PART"
-MOUNT_POINT="/mnt/External"
-echo "✅ Terdeteksi device: $USB_DEV"
+USB_PATH="/dev/$USB_PART"
+echo "[+] Partisi terdeteksi: $USB_PATH"
 
-echo "📂 3. Membuat Mount Point di $MOUNT_POINT..."
 mkdir -p "$MOUNT_POINT"
 
-# Mendapatkan UUID untuk setup fstab yang lebih stabil jika restart
-UUID=$(blkid -o value -s UUID "$USB_DEV")
-FSTYPE=$(blkid -o value -s TYPE "$USB_DEV")
+# Deteksi tipe filesystem dan UUID
+FSTYPE=$(blkid -s TYPE -o value "$USB_PATH")
+UUID_USB=$(blkid -s UUID -o value "$USB_PATH")
 
-if [ -z "$UUID" ]; then
-  echo "❌ Gagal mendapatkan UUID dari $USB_DEV"
-  exit 1
+echo "[+] Tipe filesystem: ${FSTYPE:-unknown}"
+
+# Lepas mount lama jika sudah terpasang agar permission bersih
+if mountpoint -q "$MOUNT_POINT"; then
+    umount "$MOUNT_POINT"
 fi
 
-echo "📌 4. Mengonfigurasi Auto-mount via /etc/fstab..."
-# Backup fstab sebelum diubah
-cp /etc/fstab /etc/fstab.bak
-
-# Cek apakah UUID sudah ada di fstab agar tidak duplikat
-if ! grep -q "$UUID" /etc/fstab; then
-  # Pengaturan mounting disesuaikan dengan tipe file system (NTFS/ext4/vfat)
-  if [ "$FSTYPE" == "ntfs" ] || [ "$FSTYPE" == "vfat" ]; then
-    echo "UUID=$UUID $MOUNT_POINT $FSTYPE defaults,uid=1000,gid=1000,umask=000 0 0" >> /etc/etc/fstab
-  else
-    echo "UUID=$UUID $MOUNT_POINT $FSTYPE defaults,nofail 0 2" >> /etc/fstab
-  fi
-  echo "✅ Konfigurasi fstab berhasil ditambahkan."
+# Mounting sesuai jenis filesystem
+echo "[+] Melakukan mounting ke $MOUNT_POINT..."
+if [[ "$FSTYPE" == "ntfs" || "$FSTYPE" == "vfat" || "$FSTYPE" == "exfat" ]]; then
+    # Permission NTFS/FAT diatur saat mounting (read, write, execute untuk dadi, root, & sambashare)
+    mount -t auto -o uid=$SHARE_USER,gid=$SHARE_GROUP,umask=000,nofail "$USB_PATH" "$MOUNT_POINT"
 else
-  echo "ℹ️ UUID $UUID sudah terdaftar di /etc/fstab."
+    mount "$USB_PATH" "$MOUNT_POINT"
+    chown -R "$SHARE_USER:$SHARE_GROUP" "$MOUNT_POINT"
+    chmod -R 777 "$MOUNT_POINT"
 fi
 
-# Eksekusi mount
-mount -a
-chmod -R 777 "$MOUNT_POINT"
-
-echo "⚙️ 5. Mengonfigurasi Samba Server..."
-SAMBA_CONF="/etc/samba/smb.conf"
-
-# Backup konfigurasi bawaan
-if [ ! -f "${SAMBA_CONF}.bak" ]; then
-  cp "$SAMBA_CONF" "${SAMBA_CONF}.bak"
+# Update /etc/fstab untuk auto-mount permanen
+if [ -n "$UUID_USB" ]; then
+    # Hapus entri lama jika ada
+    sed -i "\|$MOUNT_POINT|d" /etc/fstab
+    
+    echo "[+] Menambahkan entri ke /etc/fstab..."
+    if [[ "$FSTYPE" == "ntfs" || "$FSTYPE" == "vfat" || "$FSTYPE" == "exfat" ]]; then
+        echo "UUID=$UUID_USB $MOUNT_POINT auto nosuid,nodev,nofail,uid=$SHARE_USER,gid=$SHARE_GROUP,umask=000 0 2" >> /etc/fstab
+    else
+        echo "UUID=$UUID_USB $MOUNT_POINT auto nosuid,nodev,nofail 0 2" >> /etc/fstab
+    fi
 fi
 
-# Menambahkan konfigurasi Share Folder USB di akhir file
-cat <<EOT >> "$SAMBA_CONF"
+echo "--------------------------------------------------"
+echo "[!] PENGATURAN PASSWORD SAMBA"
+echo "--------------------------------------------------"
 
-[USB_Share]
-   comment = External
-   path = $MOUNT_POINT
-   browseable = yes
-   writable = yes
-   guest ok = no
-   read only = no
-   force create mode = 0777
-   force directory mode = 0777
-   valid users = dadi
-   force user = dadi
-   public = no
+echo "[+] Masukkan password Samba untuk user '$SHARE_USER':"
+smbpasswd -a "$SHARE_USER"
+smbpasswd -e "$SHARE_USER"
+
+echo ""
+echo "[+] Masukkan password Samba untuk user 'root':"
+smbpasswd -a root
+smbpasswd -e root
+
+echo "[+] 4. Menyiapkan konfigurasi /etc/samba/smb.conf..."
+cp "$SMB_CONF" "$SMB_CONF.bak_$(date +%F_%R)"
+
+# Hapus section [External] lama jika ada agar tidak double config
+sed -i '/^\[External\]/,/^\[/ { /^\[External\]/! { /^\[/!d } }' "$SMB_CONF"
+sed -i '/^\[External\]/d' "$SMB_CONF"
+
+cat <<EOT >> "$SMB_CONF"
+
+# ==========================================================
+# Konfigurasi Storage Eksternal (dadi & root)
+# ==========================================================
+[External]
+    comment = External Storage Shared
+    path = $MOUNT_POINT
+    browseable = yes
+    read only = no
+    guest ok = no
+    valid users = dadi, root
+    admin users = root
+    write list = dadi, root
+    create mask = 0777
+    directory mask = 0777
+    force create mode = 0777
+    force directory mode = 0777
 EOT
 
-echo "🔄 6. Me-restart layanan Samba..."
-sudo smbpasswd -a dadi
-sudo smbpasswd -e dadi
+echo "[+] 5. Merestart layanan Samba..."
 systemctl restart smbd
 systemctl enable smbd
 
-echo "🎉 Proses Selesai!"
+IP_ADDR=$(hostname -I | awk '{print $1}')
+
 echo "--------------------------------------------------"
-echo "📂 Mount Point : $MOUNT_POINT"
-echo "🖥️ Samba Share : \\[IP_ADDRESS_SERVER]\USB_Share"
+echo "[+] SETUP SELESAI!"
+echo "--------------------------------------------------"
+echo " IP Server   : $IP_ADDR"
+echo " Path Share  : \\\\$IP_ADDR\\External"
+echo " User Valid  : dadi ATAU root"
+echo ""
+echo " Catatan saat login dari Windows:"
+echo " - Jika login gagal, gunakan format: \\dadi atau \\root"
+echo " - Reset cache login Windows jika macet: net use * /delete /y"
 echo "--------------------------------------------------"
