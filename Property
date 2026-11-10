@@ -1,3 +1,4 @@
+#!/bin/bash
 #!/usr/bin/env bash
 # install.sh - Pasang cari_properti.py di Armbian (HG680P / Amlogic S905X)
 # Pakai:  bash install.sh
