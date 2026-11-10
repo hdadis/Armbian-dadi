@@ -43,7 +43,8 @@ kemungkinan dijual langsung oleh pemilik.
 
 Cara pakai:
   1. pip install requests beautifulsoup4 openpyxl
-  2. Isi SOURCES di bawah (URL halaman hasil pencarian + CSS selector).
+  2. Isi SOURCES di bawah: CUKUP SATU URL hasil pencarian per situs/area.
+     Halaman 2, 3, dst. dibuka otomatis; iklan dikenali otomatis (mode auto).
   3. python cari_properti.py
   Hasil: hasil_properti_TANGGAL_JAM.xlsx (hanya iklan BARU sejak run terakhir),
   disimpan lokal di OUTPUT_DIR dan/atau dikirim ke REMOTE_HOST lewat scp.
@@ -66,7 +67,7 @@ from datetime import datetime
 import random
 import urllib.robotparser
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -77,23 +78,26 @@ from openpyxl.styles import Font
 # 1. KONFIGURASI - EDIT BAGIAN INI
 # ---------------------------------------------------------------------------
 # Buka situs properti, set filter (lokasi Depok/Bogor, jenis, harga), lalu
-# salin URL hasil pencariannya ke "urls". Selector CSS dicari lewat browser:
-# klik kanan pada satu iklan -> Inspect -> lihat tag/class-nya.
+# salin SATU URL hasil pencariannya ke "urls". Selesai: script membuka halaman
+# 2, 3, dst. sendiri (maksimal "max_pages") dan mengenali iklan otomatis.
+# Satu URL per pencarian, misalnya satu untuk Depok dan satu untuk Bogor.
 SOURCES = [
     {
         "name": "ContohSitus",
         "urls": [
-            "https://www.contoh-situs-properti.com/dijual/depok?page=1",
-            "https://www.contoh-situs-properti.com/dijual/bogor?page=1",
+            "https://www.contoh-situs-properti.com/dijual/rumah/depok",
+            "https://www.contoh-situs-properti.com/dijual/rumah/bogor",
         ],
-        "item": "div.listing-card",     # pembungkus satu iklan
-        "title": "h2",                    # judul
-        "price": ".price",                # harga
-        "location": ".location",          # lokasi
-        "desc": ".description",           # deskripsi singkat (boleh kosong "")
-        "link": "a",                      # elemen <a> menuju detail iklan
-        "agent_badge": "",                # (opsional) selector lencana/logo agen di kartu iklan
-        "contact_area": "",               # (opsional) selector kotak kontak di halaman detail
+        "max_pages": 10,          # batas jumlah halaman per URL
+
+        # --- SEMUA DI BAWAH INI OPSIONAL (isi hanya jika mode otomatis meleset) ---
+        # "item": "div.listing-card",   # selector pembungkus iklan; default "auto"
+        # "title": "h2", "price": ".price", "location": ".location",
+        # "desc": ".description", "link": "a",
+        # "next": "a.next",             # selector tombol halaman berikutnya
+        # "page_param": "page",         # nama parameter halaman di URL (?page=2)
+        # "agent_badge": ".agent-logo", # lencana/logo agen di kartu iklan
+        # "contact_area": ".contact",   # kotak kontak di halaman detail iklan
     },
 ]
 
@@ -266,26 +270,151 @@ def tambah_telepon(item, src):
         item["wa_link"] = f"https://wa.me/{nomor[0]}"
 
 
-def parse(html, src, base_url):
-    soup = BeautifulSoup(html, "html.parser")
+HARGA_RE = re.compile(r"rp\.?\s?\d[\d.,]*\s?(?:juta|jt|miliar|milyar|m|rb|ribu)?\b", re.I)
+
+
+def _teks(el):
+    return el.get_text(" ", strip=True)
+
+
+def _link_kartu(node, base_url):
+    kand = [node] if node.name == "a" and node.get("href") else []
+    kand += node.find_all("a", href=True)
+    for a in kand:
+        h = a["href"].strip()
+        if h and not h.startswith(("#", "javascript:", "tel:", "mailto:")) \
+                and "wa.me" not in h and "whatsapp" not in h:
+            return urljoin(base_url, h)
+    return ""
+
+
+def auto_kartu(soup, base_url):
+    """Kenali kartu iklan otomatis: elemen terkecil yang memuat satu harga 'Rp ...'
+    dan satu link. Butuh minimal 3 iklan di halaman agar yakin."""
+    kandidat = [t for t in soup.find_all(True)
+                if t.name not in ("script", "style", "head", "html", "body")
+                and len(_teks(t)) <= 40 and HARGA_RE.search(_teks(t))]
+    ids = {id(t) for t in kandidat}
+    inti = [t for t in kandidat if not any(id(d) in ids for d in t.find_all(True))]
+    if len(inti) < 3:
+        return []
+    inti_ids = {id(t) for t in inti}
+
+    def jml(el):
+        return sum(1 for d in el.find_all(True) if id(d) in inti_ids) + (id(el) in inti_ids)
+
+    hasil, dipakai = [], set()
+    for p in inti:
+        cur = p
+        while cur.parent is not None and cur.parent.name not in ("body", "html", "[document]") \
+                and jml(cur.parent) == 1:
+            cur = cur.parent
+        if id(cur) in dipakai or len(_teks(cur)) > 2500:
+            continue
+        dipakai.add(id(cur))
+        link = _link_kartu(cur, base_url)
+        if not link:
+            continue
+        judul = ""
+        h = cur.find(["h1", "h2", "h3", "h4", "h5"])
+        if h:
+            judul = _teks(h)
+        if not judul:
+            anchors = sorted((_teks(a) for a in cur.find_all("a")), key=len, reverse=True)
+            judul = anchors[0] if anchors and anchors[0] else _teks(cur)[:80]
+        lokasi = ""
+        for d in cur.find_all(True):
+            tt = _teks(d)
+            if len(tt) <= 80 and any(k in tt.lower() for k in AREA_KEYWORDS):
+                lokasi = tt
+                break
+        hasil.append({"judul": judul, "harga": _teks(p), "lokasi": lokasi,
+                      "desc": _teks(cur)[:600], "link": link, "node": cur})
+    return hasil
+
+
+def ambil_kartu(soup, src, base_url):
+    mode = src.get("item", "auto")
+    if mode in ("", "auto"):
+        return auto_kartu(soup, base_url)
     hasil = []
-    for node in soup.select(src["item"])[:MAX_ITEMS_PER_PAGE]:
-        judul = teks(node, src["title"])
-        lokasi = teks(node, src["location"])
-        desc = teks(node, src["desc"])
-        a = node.select_one(src["link"])
-        link = urljoin(base_url, a["href"]) if a and a.get("href") else ""
-        if not link or not di_area(lokasi, judul, desc):
+    for node in soup.select(mode)[:MAX_ITEMS_PER_PAGE]:
+        a = node.select_one(src.get("link", "a"))
+        hasil.append({
+            "judul": teks(node, src.get("title", "")),
+            "harga": teks(node, src.get("price", "")),
+            "lokasi": teks(node, src.get("location", "")),
+            "desc": teks(node, src.get("desc", "")),
+            "link": urljoin(base_url, a["href"]) if a and a.get("href") else "",
+            "node": node,
+        })
+    return hasil
+
+
+def halaman_berikut(url, html, src):
+    """Cari URL halaman berikutnya: selector 'next' > rel=next > tombol
+    'Berikutnya/Next' > naikkan nomor halaman di URL."""
+    soup = BeautifulSoup(html, "html.parser")
+    sel = src.get("next", "")
+    if sel:
+        el = soup.select_one(sel)
+        return urljoin(url, el["href"]) if el and el.get("href") else ""
+    el = soup.select_one('a[rel~="next"], link[rel~="next"]')
+    if el and el.get("href"):
+        return urljoin(url, el["href"])
+    for a in soup.find_all("a", href=True):
+        if _teks(a).lower() in ("next", "berikutnya", "selanjutnya", "next »",
+                                "selanjutnya »", "›", "»", ">"):
+            return urljoin(url, a["href"])
+    pu = urlparse(url)
+    m = re.search(r"/(page|halaman|p)/(\d+)", pu.path)
+    if m:
+        path = pu.path[:m.start(2)] + str(int(m.group(2)) + 1) + pu.path[m.end(2):]
+        return urlunparse(pu._replace(path=path))
+    q = dict(parse_qsl(pu.query))
+    param = src.get("page_param") or next(
+        (k for k in ("page", "halaman", "p", "pg", "paged") if k in q), "page")
+    q[param] = str(int(q[param]) + 1) if q.get(param, "").isdigit() else "2"
+    return urlunparse(pu._replace(query=urlencode(q)))
+
+
+def iterasi_halaman(start, src):
+    """Hasilkan (url, html) halaman demi halaman sampai max_pages, tidak ada
+    halaman berikutnya, atau halaman gagal dibuka."""
+    url, dikunjungi = start, set()
+    for n in range(1, int(src.get("max_pages", 10)) + 1):
+        if not url or url in dikunjungi:
+            break
+        dikunjungi.add(url)
+        print(f"  halaman {n}: {url}")
+        html = ambil_halaman(url)
+        if not html:
+            break
+        yield url, html
+        url = halaman_berikut(url, html, src)
+        time.sleep(random.uniform(*DELAY))
+
+
+def parse(html, src, base_url):
+    """Kembalikan (iklan di area Depok-Bogor, semua link iklan di halaman)."""
+    soup = BeautifulSoup(html, "html.parser")
+    hasil, semua = [], set()
+    for k in ambil_kartu(soup, src, base_url):
+        if not k["link"]:
+            continue
+        semua.add(k["link"])
+        judul, lokasi, desc = k["judul"], k["lokasi"], k["desc"]
+        if not di_area(lokasi, judul, desc):
             continue
         skor = skor_pemilik(judul, desc)
         tanda = ada_tanda_agen(f"{judul} {desc}")
-        if src.get("agent_badge") and node.select_one(src["agent_badge"]):
+        if src.get("agent_badge") and k["node"].select_one(src["agent_badge"]):
             tanda = tanda or "badge agen"
         hasil.append({
             "tanda_agen": tanda,
             "sumber": src["name"],
             "judul": judul,
-            "harga": teks(node, src["price"]),
+            "harga": k["harga"],
             "lokasi": lokasi,
             "skor_pemilik": skor,
             "telepon": "",
@@ -293,9 +422,9 @@ def parse(html, src, base_url):
             "jml_iklan_nomor": "",
             "indikasi": "Kemungkinan agen" if tanda
                         else ("Kemungkinan pemilik" if skor > 0 else "Belum jelas"),
-            "link": link,
+            "link": k["link"],
         })
-    return hasil
+    return hasil, semua
 
 
 def muat_seen():
@@ -386,11 +515,18 @@ def main():
     baru, dibuang = [], 0
     for src in SOURCES:
         print(f"== {src['name']}")
-        for url in src["urls"]:
-            print(f"  ambil {url}")
-            html = ambil_halaman(url)
-            if html:
-                for item in parse(html, src, url):
+        for start in src["urls"]:
+            sebelumnya = None
+            for page_url, html in iterasi_halaman(start, src):
+                items, semua = parse(html, src, page_url)
+                if not semua:
+                    print("    (tidak ada iklan terbaca di halaman ini, berhenti)")
+                    break
+                if semua == sebelumnya:
+                    print("    (isi sama dengan halaman sebelumnya, berhenti)")
+                    break
+                sebelumnya = semua
+                for item in items:
                     if item["link"] in seen:
                         continue
                     seen.add(item["link"])
@@ -405,7 +541,6 @@ def main():
                         print(f"    [DIBUANG: {alasan}] {item['judul'][:60]}")
                     else:
                         baru.append(item)
-            time.sleep(random.uniform(*DELAY))
     Path(SEEN_FILE).write_text(json.dumps(sorted(seen)))
     Path(PHONES_FILE).write_text(json.dumps(phones, indent=1))
     if baru:
@@ -414,7 +549,7 @@ def main():
         print(f"\nSelesai: {len(baru)} iklan lolos filter, {dibuang} dibuang -> {output}")
     else:
         print(f"\nTidak ada iklan lolos filter ({dibuang} dibuang). "
-              "Jika semua 0, cek selector di SOURCES.")
+              "Jika tidak ada iklan terbaca sama sekali, isi selector manual di SOURCES.")
 
 
 if __name__ == "__main__":
