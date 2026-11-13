@@ -31,16 +31,27 @@ for k in id_ed25519 id_rsa id_ecdsa; do
   if [ -f "/root/.ssh/$k" ]; then KEY="/root/.ssh/$k"; break; fi
 done
 if [ -z "$KEY" ]; then
-  echo "SSH key tidak ditemukan di /root/.ssh. Siapkan dulu (ssh-keygen + ssh-copy-id ${REMOTE_USER}@${REMOTE_HOST})."
-  exit 1
+  echo "    SSH key belum ada, membuat key baru..."
+  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519 -q
+  KEY="/root/.ssh/id_ed25519"
 fi
 echo "    Pakai key: $KEY"
 
 echo "==> [3/7] Tes koneksi SSH ke ${REMOTE_HOST}"
-if ! ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
-     "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${REMOTE_DIR}' && echo ok" >/dev/null; then
-  echo "Gagal SSH ke ${REMOTE_USER}@${REMOTE_HOST}. Cek IP, jaringan, dan SSH key."
-  exit 1
+ssh_test() {
+  ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+      "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${REMOTE_DIR}' && echo ok" >/dev/null 2>&1
+}
+if ! ssh_test; then
+  echo "    Login pakai key belum bisa. Mengirim key ke ${REMOTE_HOST}..."
+  echo "    >>> Masukkan password ${REMOTE_USER}@${REMOTE_HOST} (hanya sekali ini) <<<"
+  ssh-copy-id -i "${KEY}.pub" -o StrictHostKeyChecking=accept-new \
+      "${REMOTE_USER}@${REMOTE_HOST}" </dev/tty || true
+  if ! ssh_test; then
+    echo "Gagal SSH ke ${REMOTE_USER}@${REMOTE_HOST}. Cek IP, jaringan, password, dan apakah SSH root diizinkan di perangkat tujuan."
+    exit 1
+  fi
 fi
 
 echo "==> [4/7] Pasang mount otomatis (sshfs)"
