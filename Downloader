@@ -20,12 +20,12 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "Jalankan sebagai root."; exit 1
 fi
 
-echo "==> [1/7] Install paket"
+echo "==> [1/8] Install paket"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y aria2 sshfs fuse3 curl unzip python3 ca-certificates openssh-client
 
-echo "==> [2/7] Cari SSH key"
+echo "==> [2/8] Cari SSH key"
 KEY=""
 for k in id_ed25519 id_rsa id_ecdsa; do
   if [ -f "/root/.ssh/$k" ]; then KEY="/root/.ssh/$k"; break; fi
@@ -38,7 +38,7 @@ if [ -z "$KEY" ]; then
 fi
 echo "    Pakai key: $KEY"
 
-echo "==> [3/7] Tes koneksi SSH ke ${REMOTE_HOST}"
+echo "==> [3/8] Tes koneksi SSH ke ${REMOTE_HOST}"
 ssh_test() {
   ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
       "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${REMOTE_DIR}' && echo ok" >/dev/null 2>&1
@@ -54,7 +54,7 @@ if ! ssh_test; then
   fi
 fi
 
-echo "==> [4/7] Pasang mount otomatis (sshfs)"
+echo "==> [4/8] Pasang mount otomatis (sshfs)"
 mkdir -p "$MOUNT_DIR"
 sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf 2>/dev/null || true
 # hapus entri lama untuk mount ini, lalu tulis ulang
@@ -74,7 +74,7 @@ else
   exit 1
 fi
 
-echo "==> [5/7] Konfigurasi aria2"
+echo "==> [5/8] Konfigurasi aria2"
 mkdir -p /root/.aria2
 CONF="/root/.aria2/aria2.conf"
 SECRET=""
@@ -104,7 +104,7 @@ save-session-interval=60
 EOF
 touch /root/.aria2/aria2.session
 
-echo "==> [6/7] Service aria2 (jalan otomatis saat boot)"
+echo "==> [6/8] Service aria2 (jalan otomatis saat boot)"
 cat > /etc/systemd/system/aria2.service <<EOF
 [Unit]
 Description=aria2 downloader
@@ -124,7 +124,7 @@ systemctl daemon-reload
 systemctl enable aria2 >/dev/null 2>&1
 systemctl restart aria2
 
-echo "==> [7/7] Web UI (AriaNg)"
+echo "==> [7/8] Web UI (AriaNg)"
 WEB_OK=0
 mkdir -p /opt/ariang
 URL="$(curl -fsSL https://api.github.com/repos/mayswind/AriaNg/releases/latest \
@@ -151,6 +151,32 @@ else
   echo "    Web UI gagal diunduh (aria2 tetap jalan, bisa dipakai lewat CLI)."
 fi
 
+echo "==> [8/8] Downloader YouTube (yt-dlp + ffmpeg)"
+YT_OK=0
+apt-get install -y ffmpeg
+ARCH="$(uname -m)"
+if [ "$ARCH" = "aarch64" ]; then YT_FILE="yt-dlp_linux_aarch64"; else YT_FILE="yt-dlp"; fi
+if curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YT_FILE}" -o /usr/local/bin/yt-dlp; then
+  chmod +x /usr/local/bin/yt-dlp
+  mkdir -p "${MOUNT_DIR}/YouTube" /var/tmp/yt
+  cat > /usr/local/bin/yt <<EOF
+#!/bin/bash
+# Pemakaian: yt LINK   (video, kualitas terbaik)
+exec /usr/local/bin/yt-dlp -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}/YouTube" \\
+  -o "%(title)s [%(id)s].%(ext)s" "\$@"
+EOF
+  cat > /usr/local/bin/ytmp3 <<EOF
+#!/bin/bash
+# Pemakaian: ytmp3 LINK   (hanya audio, jadi mp3)
+exec /usr/local/bin/yt-dlp -x --audio-format mp3 -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}/YouTube" \\
+  -o "%(title)s [%(id)s].%(ext)s" "\$@"
+EOF
+  chmod +x /usr/local/bin/yt /usr/local/bin/ytmp3
+  YT_OK=1
+else
+  echo "    yt-dlp gagal diunduh (bagian aria2 tetap berfungsi)."
+fi
+
 IP="$(hostname -I | awk '{print $1}')"
 SECRET_B64="$(printf '%s' "$SECRET" | base64 | tr -d '=\n')"
 
@@ -167,4 +193,9 @@ if [ "$WEB_OK" -eq 1 ]; then
 fi
 echo " Via terminal    : aria2c -x 16 -s 16 -c -d ${MOUNT_DIR} \"LINK\""
 echo " Cek status      : systemctl status aria2"
+if [ "$YT_OK" -eq 1 ]; then
+  echo " YouTube (video) : yt \"LINK_YOUTUBE\"     -> ${REMOTE_HOST}:${REMOTE_DIR}/YouTube"
+  echo " YouTube (mp3)   : ytmp3 \"LINK_YOUTUBE\""
+  echo " Update yt-dlp   : yt-dlp -U   (jalankan kalau YouTube mulai error)"
+fi
 echo "=============================================="
