@@ -1,0 +1,159 @@
+#!/bin/bash
+# ============================================================
+#  instalasi.sh - Downloader aria2 untuk Armbian HG680P
+#  Hasil download otomatis disimpan ke:
+#    192.168.18.2:/mnt/External/Downloads/IDM  (lewat sshfs)
+#  Aman dijalankan berulang kali.
+# ============================================================
+set -e
+
+# ---------- PENGATURAN (ubah di sini kalau perlu) ----------
+REMOTE_USER="root"
+REMOTE_HOST="192.168.18.2"
+REMOTE_DIR="/mnt/External/Downloads/IDM"
+MOUNT_DIR="/mnt/idm"
+RPC_PORT="6800"
+WEB_PORT="6880"
+# -----------------------------------------------------------
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Jalankan sebagai root."; exit 1
+fi
+
+echo "==> [1/7] Install paket"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y aria2 sshfs fuse3 curl unzip python3 ca-certificates openssh-client
+
+echo "==> [2/7] Cari SSH key"
+KEY=""
+for k in id_ed25519 id_rsa id_ecdsa; do
+  if [ -f "/root/.ssh/$k" ]; then KEY="/root/.ssh/$k"; break; fi
+done
+if [ -z "$KEY" ]; then
+  echo "SSH key tidak ditemukan di /root/.ssh. Siapkan dulu (ssh-keygen + ssh-copy-id ${REMOTE_USER}@${REMOTE_HOST})."
+  exit 1
+fi
+echo "    Pakai key: $KEY"
+
+echo "==> [3/7] Tes koneksi SSH ke ${REMOTE_HOST}"
+if ! ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+     "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${REMOTE_DIR}' && echo ok" >/dev/null; then
+  echo "Gagal SSH ke ${REMOTE_USER}@${REMOTE_HOST}. Cek IP, jaringan, dan SSH key."
+  exit 1
+fi
+
+echo "==> [4/7] Pasang mount otomatis (sshfs)"
+mkdir -p "$MOUNT_DIR"
+sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf 2>/dev/null || true
+# hapus entri lama untuk mount ini, lalu tulis ulang
+sed -i "\|[[:space:]]${MOUNT_DIR}[[:space:]]|d" /etc/fstab
+echo "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR} ${MOUNT_DIR} fuse.sshfs _netdev,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,IdentityFile=${KEY},StrictHostKeyChecking=accept-new,allow_other 0 0" >> /etc/fstab
+systemctl daemon-reload
+systemctl stop aria2 2>/dev/null || true
+if mountpoint -q "$MOUNT_DIR"; then
+  umount "$MOUNT_DIR" 2>/dev/null || umount -l "$MOUNT_DIR" 2>/dev/null || true
+fi
+mount "$MOUNT_DIR"
+if touch "$MOUNT_DIR/.tes_tulis" 2>/dev/null; then
+  rm -f "$MOUNT_DIR/.tes_tulis"
+  echo "    Mount OK, folder bisa ditulis."
+else
+  echo "Mount berhasil tapi folder tidak bisa ditulis. Cek izin folder di ${REMOTE_HOST}."
+  exit 1
+fi
+
+echo "==> [5/7] Konfigurasi aria2"
+mkdir -p /root/.aria2
+CONF="/root/.aria2/aria2.conf"
+SECRET=""
+if [ -f "$CONF" ]; then
+  SECRET="$(grep '^rpc-secret=' "$CONF" | head -n1 | cut -d= -f2-)"
+fi
+if [ -z "$SECRET" ]; then
+  SECRET="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"
+fi
+cat > "$CONF" <<EOF
+dir=${MOUNT_DIR}
+continue=true
+max-concurrent-downloads=3
+max-connection-per-server=16
+split=16
+min-split-size=1M
+file-allocation=none
+disk-cache=16M
+enable-rpc=true
+rpc-listen-all=true
+rpc-listen-port=${RPC_PORT}
+rpc-allow-origin-all=true
+rpc-secret=${SECRET}
+input-file=/root/.aria2/aria2.session
+save-session=/root/.aria2/aria2.session
+save-session-interval=60
+EOF
+touch /root/.aria2/aria2.session
+
+echo "==> [6/7] Service aria2 (jalan otomatis saat boot)"
+cat > /etc/systemd/system/aria2.service <<EOF
+[Unit]
+Description=aria2 downloader
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=${MOUNT_DIR}
+
+[Service]
+ExecStart=/usr/bin/aria2c --conf-path=${CONF}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable aria2 >/dev/null 2>&1
+systemctl restart aria2
+
+echo "==> [7/7] Web UI (AriaNg)"
+WEB_OK=0
+mkdir -p /opt/ariang
+URL="$(curl -fsSL https://api.github.com/repos/mayswind/AriaNg/releases/latest \
+  | grep -o 'https://[^"]*AllInOne[^"]*\.zip' | head -n1 || true)"
+if [ -n "$URL" ] && curl -fsSL "$URL" -o /tmp/ariang.zip && unzip -oq /tmp/ariang.zip -d /opt/ariang; then
+  rm -f /tmp/ariang.zip
+  cat > /etc/systemd/system/ariang.service <<EOF
+[Unit]
+Description=AriaNg web UI
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 -m http.server ${WEB_PORT} --directory /opt/ariang
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable ariang >/dev/null 2>&1
+  systemctl restart ariang
+  WEB_OK=1
+else
+  echo "    Web UI gagal diunduh (aria2 tetap jalan, bisa dipakai lewat CLI)."
+fi
+
+IP="$(hostname -I | awk '{print $1}')"
+SECRET_B64="$(printf '%s' "$SECRET" | base64 | tr -d '=\n')"
+
+echo
+echo "=============================================="
+echo " SELESAI"
+echo "=============================================="
+echo " Folder download : ${REMOTE_HOST}:${REMOTE_DIR}"
+echo " RPC secret      : ${SECRET}"
+if [ "$WEB_OK" -eq 1 ]; then
+  echo " Web UI          : http://${IP}:${WEB_PORT}/#!/settings/rpc/set/ws/${IP}/${RPC_PORT}/jsonrpc/${SECRET_B64}"
+  echo "                   (kalau tidak terisi otomatis: AriaNg Settings > RPC,"
+  echo "                    host ${IP}, port ${RPC_PORT}, secret di atas)"
+fi
+echo " Via terminal    : aria2c -x 16 -s 16 -c -d ${MOUNT_DIR} \"LINK\""
+echo " Cek status      : systemctl status aria2"
+echo "=============================================="
