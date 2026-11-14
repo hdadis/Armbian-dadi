@@ -11,7 +11,7 @@ set -e
 REMOTE_USER="root"
 REMOTE_HOST="192.168.18.2"
 REMOTE_DIR="/mnt/External/Downloads/IDM"
-MOUNT_DIR="/mnt/idm"
+MOUNT_DIR="/mnt/External/Downloads/IDM"
 RPC_PORT="6800"
 WEB_PORT="6880"
 # -----------------------------------------------------------
@@ -55,6 +55,21 @@ if ! ssh_test; then
 fi
 
 echo "==> [4/8] Pasang mount otomatis (sshfs)"
+# bersihkan mount lama /mnt/idm (dari instalasi sebelumnya), file di 192.168.18.2 tidak disentuh
+OLD_MOUNT="/mnt/idm"
+if [ "$MOUNT_DIR" != "$OLD_MOUNT" ]; then
+  systemctl stop aria2 2>/dev/null || true
+  if mountpoint -q "$OLD_MOUNT"; then
+    umount "$OLD_MOUNT" 2>/dev/null || umount -l "$OLD_MOUNT" 2>/dev/null || true
+  fi
+  sed -i "\|[[:space:]]${OLD_MOUNT}[[:space:]]|d" /etc/fstab
+  rmdir "$OLD_MOUNT" 2>/dev/null || true
+fi
+# jangan sampai menutupi file lokal yang sudah ada di folder tujuan
+if [ -d "$MOUNT_DIR" ] && ! mountpoint -q "$MOUNT_DIR" && [ -n "$(ls -A "$MOUNT_DIR" 2>/dev/null)" ]; then
+  echo "Folder lokal ${MOUNT_DIR} di HG680P sudah ada isinya. Pindahkan/kosongkan dulu, lalu jalankan ulang."
+  exit 1
+fi
 mkdir -p "$MOUNT_DIR"
 sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf 2>/dev/null || true
 # hapus entri lama untuk mount ini, lalu tulis ulang
@@ -158,17 +173,17 @@ ARCH="$(uname -m)"
 if [ "$ARCH" = "aarch64" ]; then YT_FILE="yt-dlp_linux_aarch64"; else YT_FILE="yt-dlp"; fi
 if curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YT_FILE}" -o /usr/local/bin/yt-dlp; then
   chmod +x /usr/local/bin/yt-dlp
-  mkdir -p "${MOUNT_DIR}/YouTube" /var/tmp/yt
+  mkdir -p /var/tmp/yt
   cat > /usr/local/bin/yt <<EOF
 #!/bin/bash
 # Pemakaian: yt LINK   (video, kualitas terbaik)
-exec /usr/local/bin/yt-dlp -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}/YouTube" \\
+exec /usr/local/bin/yt-dlp -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
   -o "%(title)s [%(id)s].%(ext)s" "\$@"
 EOF
   cat > /usr/local/bin/ytmp3 <<EOF
 #!/bin/bash
 # Pemakaian: ytmp3 LINK   (hanya audio, jadi mp3)
-exec /usr/local/bin/yt-dlp -x --audio-format mp3 -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}/YouTube" \\
+exec /usr/local/bin/yt-dlp -x --audio-format mp3 -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
   -o "%(title)s [%(id)s].%(ext)s" "\$@"
 EOF
   chmod +x /usr/local/bin/yt /usr/local/bin/ytmp3
@@ -194,7 +209,7 @@ fi
 echo " Via terminal    : aria2c -x 16 -s 16 -c -d ${MOUNT_DIR} \"LINK\""
 echo " Cek status      : systemctl status aria2"
 if [ "$YT_OK" -eq 1 ]; then
-  echo " YouTube (video) : yt \"LINK_YOUTUBE\"     -> ${REMOTE_HOST}:${REMOTE_DIR}/YouTube"
+  echo " YouTube (video) : yt \"LINK_YOUTUBE\"     -> ${REMOTE_HOST}:${REMOTE_DIR}"
   echo " YouTube (mp3)   : ytmp3 \"LINK_YOUTUBE\""
   echo " Update yt-dlp   : yt-dlp -U   (jalankan kalau YouTube mulai error)"
 fi
