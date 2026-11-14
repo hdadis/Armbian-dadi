@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# install.sh (v2) - TV-Console Gaming: Roblox (Sober) + Minecraft Bedrock
+# Target : Debian / Ubuntu / Armbian x86_64  (Lenovo S410p: Intel HD 4600 + NVIDIA)
+#
+# Jalankan sebagai USER BIASA yang punya sudo (bukan root):
+#     bash install.sh
+#
+# Opsi lewat environment variable (semua opsional):
+#     AUTOLOGIN_USER=nama     user untuk autologin (default: user yang menjalankan)
+#     INSTALL_NVIDIA=auto|no  pasang driver NVIDIA legacy bila terdeteksi (default: auto)
+#     INSTALL_SOBER=1|0       Roblox via Sober      (default: 1)
+#     INSTALL_MCPE=1|0        Minecraft Bedrock     (default: 1)
+#     INSTALL_PRISM=1|0       Prism Launcher (Minecraft Java) (default: 1)
+#
+# Contoh: INSTALL_NVIDIA=no bash install.sh
+# Log    : /var/tmp/install-gaming.log
+# ==============================================================================
+set -uo pipefail
+
+INSTALL_NVIDIA="${INSTALL_NVIDIA:-auto}"
+INSTALL_SOBER="${INSTALL_SOBER:-1}"
+INSTALL_MCPE="${INSTALL_MCPE:-1}"
+INSTALL_PRISM="${INSTALL_PRISM:-1}"
+LOG="/var/tmp/install-gaming.log"
+FAILED=()
+WARNINGS=()
+
+# ------------------------------------------------------------------ helper ----
+log()  { echo; echo "=== $* ==="; }
+warn() { echo "!! PERINGATAN: $*"; WARNINGS+=("$*"); }
+die()  { echo "XX FATAL: $*" >&2; exit 1; }
+
+as_root() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
+apt_get() { as_root env DEBIAN_FRONTEND=noninteractive apt-get -y \
+              -o Dpkg::Options::=--force-confold "$@"; }
+
+# retry <perintah...> : coba maksimal 3 kali (jaringan bisa putus-putus)
+retry() {
+    local n=0
+    until "$@"; do
+        n=$((n + 1))
+        [[ $n -ge 3 ]] && return 1
+        echo "   ulangi ($n/3) dalam 5 detik ..."
+        sleep 5
+    done
+}
+
+# run "deskripsi" <perintah...> : catat kegagalan tapi jangan hentikan script
+run() {
+    local desc=$1; shift
+    echo "--> $desc"
+    if ! "$@"; then
+        echo "!! GAGAL: $desc"
+        FAILED+=("$desc")
+        return 1
+    fi
+}
+
+# --------------------------------------------------------------- pra-cek ------
+[[ $(uname -m) == x86_64 ]] || die "Script ini hanya untuk x86_64 (arsitektur kamu: $(uname -m))."
+
+# shellcheck disable=SC1091
+. /etc/os-release
+case " ${ID:-} ${ID_LIKE:-} " in
+    *debian*|*ubuntu*) ;;
+    *) die "OS tidak didukung (${PRETTY_NAME:-unknown}). Butuh Debian/Ubuntu/Armbian." ;;
+esac
+
+if [[ $EUID -eq 0 ]]; then
+    TARGET_USER="${SUDO_USER:-}"
+    [[ -n $TARGET_USER && $TARGET_USER != root ]] \
+        || die "Jalankan sebagai user biasa: 'bash install.sh' (jangan langsung login root)."
+else
+    TARGET_USER="$USER"
+    sudo -v || die "Butuh akses sudo."
+fi
+TARGET_USER="${AUTOLOGIN_USER:-$TARGET_USER}"
+id "$TARGET_USER" >/dev/null 2>&1 || die "User '$TARGET_USER' tidak ditemukan."
+
+# Mulai logging setelah sudo -v supaya prompt password tidak tercampur
+exec > >(tee -a "$LOG") 2>&1
+echo "Log disimpan di $LOG ($(date))"
+
+avail_mb=$(df -Pm / | awk 'NR==2{print $4}')
+[[ ${avail_mb:-0} -ge 6000 ]] || die "Ruang kosong di / hanya ${avail_mb} MB (butuh minimal ~6000 MB)."
+
+ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+echo "OS: ${PRETTY_NAME:-?} | RAM: ${ram_mb} MB | Disk kosong: ${avail_mb} MB | User: $TARGET_USER"
+
+if [[ $INSTALL_SOBER == 1 ]] && ! grep -qm1 sse4_2 /proc/cpuinfo; then
+    warn "CPU tidak mendukung SSE4.2, Sober (Roblox) dilewati."
+    INSTALL_SOBER=0
+fi
+
+# ------------------------------------------------ [1/7] update sistem ---------
+log "[1/7] Memperbarui repositori dan sistem"
+retry apt_get update || die "apt update gagal. Cek koneksi internet."
+run "apt upgrade" apt_get upgrade
+
+# ------------------------------------------------ [2/7] paket dasar -----------
+log "[2/7] Memasang desktop ringan, audio PipeWire, driver Mesa/Vulkan"
+# Supaya pemasangan lightdm tidak memunculkan dialog pemilihan display manager
+echo "lightdm shared/default-x-display-manager select lightdm" | as_root debconf-set-selections
+
+PKGS=(
+    xorg xfce4 xfce4-terminal lightdm lightdm-gtk-greeter
+    mesa-va-drivers mesa-vulkan-drivers mesa-utils vulkan-tools
+    pipewire pipewire-pulse pipewire-alsa wireplumber pavucontrol
+    flatpak curl wget ca-certificates pciutils mokutil
+)
+run "pasang paket dasar" retry apt_get install "${PKGS[@]}"
+
+# ------------------------------------------------ [3/7] driver NVIDIA ---------
+log "[3/7] Mendeteksi GPU dan driver NVIDIA"
+echo "GPU terdeteksi:"
+lspci -nn | grep -Ei 'vga|3d|display' || echo "(lspci tidak menampilkan GPU)"
+
+nvidia_candidate() {
+    # cetak nama paket pertama yang punya kandidat di repo
+    local p cand
+    for p in "$@"; do
+        cand=$(apt-cache policy "$p" 2>/dev/null | awk '/Candidate:/{print $2}')
+        if [[ -n $cand && $cand != "(none)" ]]; then echo "$p"; return 0; fi
+    done
+    return 1
+}
+
+install_nvidia() {
+    local gpu gen pkg
+    gpu=$(lspci -nn | grep -Ei 'vga|3d|display' | grep -i nvidia || true)
+    if [[ -z $gpu ]]; then echo "Tidak ada GPU NVIDIA, dilewati."; return 0; fi
+
+    # Seri GT 7xxM di S410p bisa Fermi (GF117, mis. GT 720M) atau Kepler (GK208, mis. GT 740M)
+    if   grep -qE 'GF1[0-9]{2}' <<<"$gpu"; then
+        gen="Fermi";  pkg=$(nvidia_candidate nvidia-driver-390 nvidia-legacy-390xx-driver) || pkg=""
+    elif grep -qE 'GK[0-9]{3}'  <<<"$gpu"; then
+        gen="Kepler"; pkg=$(nvidia_candidate nvidia-driver-470 nvidia-legacy-470xx-driver nvidia-tesla-470-driver) || pkg=""
+    else
+        warn "Generasi GPU NVIDIA tidak dikenali ($gpu). Pasang driver manual."
+        return 0
+    fi
+
+    echo "GPU NVIDIA generasi $gen"
+    if [[ -z $pkg ]]; then
+        warn "Driver legacy untuk $gen tidak ada di repo OS ini (di Debian aktifkan 'contrib non-free'). Lanjut tanpa driver NVIDIA (pakai Intel/nouveau)."
+        return 0
+    fi
+    if [[ $gen == Fermi ]]; then
+        warn "GPU Fermi: driver legacy 390 sangat tua dan TIDAK punya Vulkan. Sober akan memakai OpenGL ES. Jika layar bermasalah, copot dengan: sudo apt purge '~nnvidia'."
+    fi
+
+    as_root apt-get install -y "linux-headers-$(uname -r)" >/dev/null 2>&1 \
+        || echo "(linux-headers tidak ditemukan, DKMS mungkin tidak bisa build)"
+    echo "Memasang $pkg ..."
+    retry apt_get install "$pkg"
+}
+
+if [[ $INSTALL_NVIDIA == auto ]]; then
+    run "driver NVIDIA legacy" install_nvidia
+else
+    echo "INSTALL_NVIDIA=$INSTALL_NVIDIA -> dilewati."
+fi
+
+if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+    warn "Secure Boot AKTIF. Modul NVIDIA tidak akan dimuat kecuali ditandatangani. Matikan Secure Boot di BIOS bila memakai NVIDIA."
+fi
+
+# ------------------------------------------------ [4/7] mode grafis -----------
+log "[4/7] Mengaktifkan login grafis dan autologin ($TARGET_USER)"
+as_root systemctl enable lightdm
+as_root systemctl set-default graphical.target
+
+as_root install -d /etc/lightdm/lightdm.conf.d
+{
+    echo "[Seat:*]"
+    echo "autologin-user=$TARGET_USER"
+    echo "autologin-user-timeout=0"
+    [[ -f /usr/share/xsessions/xfce.desktop ]] && echo "autologin-session=xfce"
+} | as_root tee /etc/lightdm/lightdm.conf.d/50-gaming-autologin.conf >/dev/null
+
+getent group autologin >/dev/null || as_root groupadd -r autologin
+as_root usermod -aG autologin "$TARGET_USER"
+
+# ------------------------------------------------ [5/7] flatpak ---------------
+log "[5/7] Menyiapkan Flatpak dan Flathub"
+retry curl -fsI --max-time 20 https://dl.flathub.org >/dev/null \
+    || warn "dl.flathub.org tidak terjangkau, pemasangan aplikasi Flatpak kemungkinan gagal."
+run "tambah remote Flathub" as_root flatpak remote-add --if-not-exists flathub \
+    https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# ------------------------------------------------ [6/7] aplikasi --------------
+log "[6/7] Memasang aplikasi game via Flatpak"
+fp_install() { retry as_root flatpak install -y --noninteractive flathub "$1"; }
+
+[[ $INSTALL_SOBER == 1 ]] && run "Roblox (Sober)"                 fp_install org.vinegarhq.Sober
+[[ $INSTALL_MCPE  == 1 ]] && run "Minecraft Bedrock (mcpelauncher)" fp_install io.mrarm.mcpelauncher
+[[ $INSTALL_PRISM == 1 ]] && run "Prism Launcher (Minecraft Java)"  fp_install org.prismlauncher.PrismLauncher
+
+# ------------------------------------------------ [7/7] alat cek --------------
+log "[7/7] Membuat perintah 'cek-gaming'"
+as_root tee /usr/local/bin/cek-gaming >/dev/null <<'EOS'
+#!/usr/bin/env bash
+echo "== GPU ==";            lspci -nn | grep -Ei 'vga|3d|display'
+echo; echo "== Driver NVIDIA =="; nvidia-smi 2>&1 | head -n 12
+echo; echo "== Vulkan ==";     vulkaninfo --summary 2>&1 | grep -E 'deviceName|apiVersion|driverName' || echo "Vulkan tidak tersedia"
+echo; echo "== OpenGL ==";     glxinfo -B 2>&1 | grep -E 'renderer|OpenGL version|OpenGL ES profile version'
+echo; echo "== Aplikasi Flatpak =="; flatpak list --app 2>/dev/null | grep -E 'Sober|mcpelauncher|Prism'
+echo; echo "== Runtime NVIDIA Flatpak =="; flatpak list --runtime 2>/dev/null | grep -i nvidia || echo "(tidak ada / tidak perlu)"
+echo; echo "== Update runtime Flatpak (menyamakan versi dengan driver host) =="
+sudo flatpak update -y
+EOS
+as_root chmod +x /usr/local/bin/cek-gaming
+
+# ------------------------------------------------ ringkasan -------------------
+echo
+echo "=============================================================================="
+if [[ ${#FAILED[@]} -eq 0 ]]; then
+    echo " Instalasi selesai tanpa kegagalan."
+else
+    echo " Instalasi selesai dengan KEGAGALAN pada langkah berikut:"
+    printf '   - %s\n' "${FAILED[@]}"
+    echo " Jalankan ulang script ini (aman diulang), atau lihat log: $LOG"
+fi
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+    echo " Peringatan:"
+    printf '   - %s\n' "${WARNINGS[@]}"
+fi
+cat <<EOF
+
+ LANGKAH BERIKUTNYA:
+   1. sudo reboot
+   2. Setelah masuk desktop, buka terminal dan jalankan:  cek-gaming
+   3. Buka Sober sekali (menu Aplikasi > Game) untuk setup awal dan login Roblox.
+   4. Minecraft Bedrock: login akun Google yang sudah membeli Minecraft di mcpelauncher.
+   5. Tes performa di Intel dulu. Jika driver NVIDIA terpasang dan 'nvidia-smi' normal,
+      di Ubuntu kamu bisa mencoba:  sudo prime-select nvidia  (kembali: sudo prime-select intel)
+==============================================================================
+EOF
