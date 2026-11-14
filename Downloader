@@ -176,17 +176,32 @@ if curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YT_FI
   mkdir -p /var/tmp/yt
   cat > /usr/local/bin/yt <<EOF
 #!/bin/bash
-# Pemakaian: yt LINK   (video, kualitas terbaik)
-exec /usr/local/bin/yt-dlp -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
-  -o "%(title)s [%(id)s].%(ext)s" "\$@"
+# Pemakaian: yt "LINK"   (video, jalan otomatis di latar belakang)
+mkdir -p /var/tmp/yt-logs
+LOG="/var/tmp/yt-logs/\$(date +%Y%m%d-%H%M%S).log"
+setsid nohup /usr/local/bin/yt-dlp --newline -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
+  -o "%(title)s [%(id)s].%(ext)s" "\$@" > "\$LOG" 2>&1 < /dev/null &
+ln -sf "\$LOG" /var/tmp/yt-logs/latest.log
+echo "Unduhan berjalan di latar belakang. Terminal boleh ditutup."
+echo "Lihat progress: ytlog"
 EOF
   cat > /usr/local/bin/ytmp3 <<EOF
 #!/bin/bash
-# Pemakaian: ytmp3 LINK   (hanya audio, jadi mp3)
-exec /usr/local/bin/yt-dlp -x --audio-format mp3 -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
-  -o "%(title)s [%(id)s].%(ext)s" "\$@"
+# Pemakaian: ytmp3 "LINK"   (audio mp3, jalan otomatis di latar belakang)
+mkdir -p /var/tmp/yt-logs
+LOG="/var/tmp/yt-logs/\$(date +%Y%m%d-%H%M%S).log"
+setsid nohup /usr/local/bin/yt-dlp --newline -x --audio-format mp3 -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
+  -o "%(title)s [%(id)s].%(ext)s" "\$@" > "\$LOG" 2>&1 < /dev/null &
+ln -sf "\$LOG" /var/tmp/yt-logs/latest.log
+echo "Unduhan berjalan di latar belakang. Terminal boleh ditutup."
+echo "Lihat progress: ytlog"
 EOF
-  chmod +x /usr/local/bin/yt /usr/local/bin/ytmp3
+  cat > /usr/local/bin/ytlog <<'EOF'
+#!/bin/bash
+# Lihat progress unduhan terakhir (Ctrl+C untuk keluar, unduhan tetap jalan)
+tail -n 30 -f /var/tmp/yt-logs/latest.log
+EOF
+  chmod +x /usr/local/bin/yt /usr/local/bin/ytmp3 /usr/local/bin/ytlog
   YT_OK=1
 else
   echo "    yt-dlp gagal diunduh (bagian aria2 tetap berfungsi)."
@@ -211,6 +226,7 @@ echo " Cek status      : systemctl status aria2"
 if [ "$YT_OK" -eq 1 ]; then
   echo " YouTube (video) : yt \"LINK_YOUTUBE\"     -> ${REMOTE_HOST}:${REMOTE_DIR}"
   echo " YouTube (mp3)   : ytmp3 \"LINK_YOUTUBE\""
+  echo " Lihat progress  : ytlog   (unduhan jalan di latar belakang, terminal boleh ditutup)"
   echo " Update yt-dlp   : yt-dlp -U   (jalankan kalau YouTube mulai error)"
 fi
 echo "=============================================="
