@@ -2,8 +2,20 @@ sudo tee /root/cleanup.sh >/dev/null << 'EOF'
 #!/bin/bash
 
 # ==============================================================================
-# Script Pembersihan Menyeluruh, Auto-Cron 5 Jam & Refresh Nginx (Armbian STB HG680P)
-# Terintegrasi: n8n Safe UI, Purge Compiler, MOCP Safe, AdGuard Clean, Nginx
+# Cleanup & Refresh STB Armbian HG680P  (v2)
+# Layanan: AdGuardHome, Unbound, Samba, Shinobi, MOCP, CUPS, Nginx, n8n,
+#          Cloudflared, Telegram, emulator PS1/NES/GBA, aria2 + yt-dlp
+#
+# PRINSIP: hanya membersihkan LOG, CACHE, FILE SEMENTARA & UNDUHAN LAMA.
+#   TIDAK PERNAH menyentuh: konfigurasi, database, kredensial/token, save game,
+#   ROM, rekaman Shinobi, playlist MOC, dan folder mount jaringan (sshfs/cifs/nfs
+#   seperti /mnt/External/Downloads/IDM).
+#
+# Perintah:
+#   clean-stb            pembersihan penuh manual (APT, swap, RAM, dll)
+#   clean-stb --all      seperti di atas + hapus SEMUA file unduhan n8n sekarang
+#   clean-stb --auto     versi ringan & aman (ini yang dipakai cron tiap 5 jam)
+#   refresh-web          hanya rapikan izin website & reload Nginx
 # ==============================================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -11,8 +23,28 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# cron punya PATH minim; pastikan pm2/n8n/dll tetap ketemu
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 SCRIPT_PATH="/root/cleanup.sh"
+LOG_FILE="/var/log/cleanup-stb.log"
 MODE="${1:-full}"
+
+case "$MODE" in
+  full|--all|--auto|--web-only) ;;
+  *) echo "Pemakaian: clean-stb [--all | --auto | --web-only]"; exit 1 ;;
+esac
+
+# ------------------------------------------------------------------------------
+# PENGATURAN (ubah di sini kalau perlu)
+# ------------------------------------------------------------------------------
+KEEP_HOURS=5                    # umur file unduhan n8n sebelum dihapus
+JOURNAL_KEEP_TIME="2d"          # log systemd disimpan maksimal sekian hari
+JOURNAL_KEEP_SIZE="20M"         # dan maksimal sekian ukuran
+ADGUARD_DIR="/opt/AdGuardHome"  # lokasi AdGuard Home (dideteksi otomatis jika beda)
+ADGUARD_AUTO_RESET_MB=20        # mode otomatis: reset statistik AdGuard hanya jika > sekian MB
+PURGE_COMPILER="no"             # "yes" = hapus build-essential (gcc/g++) saat clean-stb manual
+SWAP_TARGET_MB=1024             # ukuran ideal /swapfile
 
 CLEAN_DIRS=(
   "/root/n8n/downloads"
@@ -24,209 +56,421 @@ CLEAN_DIRS=(
   "/root/Downloads"
 )
 
+# Tambahkan folder unduhan lain di sini (misal folder unduhan bot Telegram)
+EXTRA_CLEAN_DIRS=(
+)
+
 WEB_DIRS=(
   "/root/website"
   "/home/armbian/website"
   "/home/dadi/website"
 )
 
-clean_n8n_files() {
-  local FORCE_ALL="${1:-false}"
-  for d in "${CLEAN_DIRS[@]}"; do
-    # Lewati symlink agar tidak menghapus folder yang sama dua kali
-    if [ -d "$d" ] && [ ! -L "$d" ]; then
-      if [ "$FORCE_ALL" = "true" ]; then
-        # Mode manual (--all): Hapus semua file detik ini juga tanpa peduli umur file
-        find "$d" -mindepth 1 -delete 2>/dev/null || true
-      else
-        # Mode reguler (5 jam): Hapus file yang umurnya > 5 jam (300 menit) + subfolder kosong
-        find "$d" -type f -mmin +300 -delete 2>/dev/null || true
-        find "$d" -mindepth 1 -type d -empty -delete 2>/dev/null || true
-      fi
+# Hanya file LOG yang dikosongkan (isi dikosongkan, file & izinnya tetap)
+LOG_GLOBS=(
+  "/var/log/nginx/*.log"
+  "/var/log/postgresql/*.log"
+  "/var/log/mysql/*.log"
+  "/var/log/mariadb/*.log"
+  "/var/log/samba/log.*"
+  "/var/log/cups/*_log"
+  "/var/log/unbound/*.log"
+  "/var/log/unbound.log"
+  "/var/log/cloudflared*.log"
+  "/var/log/cloudflared/*.log"
+  "/var/log/AdGuardHome*.log"
+  "/home/Shinobi/logs/*"
+)
+
+SERVICES=(AdGuardHome unbound smbd nmbd cups nginx cloudflared mariadb mysql postgresql aria2 ariang)
+
+ALL_CLEAN_DIRS=("${CLEAN_DIRS[@]}" "${EXTRA_CLEAN_DIRS[@]}")
+
+# ------------------------------------------------------------------------------
+# FUNGSI BANTU
+# ------------------------------------------------------------------------------
+log()  { echo "[+] $*"; }
+warn() { echo "[-] $*"; }
+sep()  { echo "--------------------------------------------------"; }
+
+show_disk() {
+  df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
+}
+
+# true jika path berada di mount jaringan (sshfs/cifs/nfs) -> TIDAK BOLEH dibersihkan
+is_remote_fs() {
+  local fs
+  fs=$(findmnt -n -o FSTYPE -T "$1" 2>/dev/null | head -n1)
+  case "$fs" in
+    fuse*|cifs|smb3|nfs|nfs4) return 0 ;;
+  esac
+  return 1
+}
+
+yt_running() { pgrep -f 'yt-dlp' >/dev/null 2>&1; }
+
+# ------------------------------------------------------------------------------
+# PEMBERSIHAN
+# ------------------------------------------------------------------------------
+clean_download_dirs() {
+  local force_all="${1:-false}" d
+  for d in "${ALL_CLEAN_DIRS[@]}"; do
+    [ -d "$d" ] || continue
+    [ -L "$d" ] && continue
+    if is_remote_fs "$d"; then
+      warn "Lewati $d (folder jaringan/mount, tidak disentuh)"
+      continue
+    fi
+    if [ "$force_all" = "true" ]; then
+      find "$d" -xdev -mindepth 1 -delete 2>/dev/null || true
+    else
+      find "$d" -xdev -type f -mmin +$((KEEP_HOURS * 60)) -delete 2>/dev/null || true
+      find "$d" -xdev -mindepth 1 -type d -empty -delete 2>/dev/null || true
     fi
   done
 }
 
-refresh_nginx_web() {
-  if command -v nginx >/dev/null 2>&1; then
-    echo "[+] Memperbarui izin akses folder website & memuat ulang Nginx..."
-    chmod 711 /root 2>/dev/null || true
-    for w in "${WEB_DIRS[@]}"; do
-      if [ -d "$w" ]; then
-        OWNER_USER=$(stat -c '%U' "$(dirname "$w")")
-        chmod o+x "$(dirname "$w")" 2>/dev/null || true
-        chown -R "$OWNER_USER":www-data "$w"
-        find "$w" -type d -exec chmod 2755 {} +
-        find "$w" -type f -exec chmod 644 {} +
-      fi
-    done
+# File sementara & log unduhan YouTube (yt/ytmp3/ytm4a). Dilewati jika masih ada unduhan jalan.
+clean_yt_temp() {
+  local mode="$1"
+  [ -d /var/tmp/yt ] || [ -d /var/tmp/yt-logs ] || return 0
+  if yt_running; then
+    log "yt-dlp masih berjalan, file sementara & log unduhan YouTube dilewati."
+    return 0
+  fi
+  log "Membersihkan file sementara & log unduhan YouTube..."
+  if [ "$mode" = "all" ]; then
+    find /var/tmp/yt /var/tmp/yt-logs -xdev -mindepth 1 -delete 2>/dev/null || true
+  else
+    find /var/tmp/yt /var/tmp/yt-logs -xdev -mindepth 1 -mtime +0 -delete 2>/dev/null || true
+    find /var/tmp/yt-logs -xdev -xtype l -delete 2>/dev/null || true
+  fi
+}
 
+# Hanya hapus yang sudah lama tak disentuh, supaya proses yang sedang jalan (MOCP,
+# Shinobi, ffmpeg, dll) tidak terganggu. Tidak pernah menyeberang ke mount lain.
+clean_tmp() {
+  local age_min="${1:-60}"
+  log "Membersihkan file temporary lama di /tmp dan /var/tmp (> ${age_min} menit)..."
+  find /tmp -xdev -mindepth 1 -maxdepth 1 -mmin +"$age_min" \
+    ! -name 'moc*' ! -name 'systemd-private*' ! -name 'tmux-*' ! -name 'ssh-*' ! -name '.X11-unix' \
+    -exec rm -rf --one-file-system {} + 2>/dev/null || true
+  find /var/tmp -xdev -mindepth 1 -maxdepth 1 -mmin +"$age_min" \
+    ! -name 'systemd-private*' ! -name 'yt' ! -name 'yt-logs' \
+    -exec rm -rf --one-file-system {} + 2>/dev/null || true
+}
+
+clean_caches() {
+  local c
+  log "Membersihkan cache NPM & cache user (UI n8n, save game & konfigurasi emulator aman)..."
+  rm -rf --one-file-system /root/.npm /home/*/.npm /root/.node-gyp /home/*/.node-gyp 2>/dev/null || true
+  for c in /root/.cache /home/*/.cache; do
+    [ -d "$c" ] || continue
+    find "$c" -xdev -mindepth 1 -maxdepth 1 ! -name 'n8n' \
+      -exec rm -rf --one-file-system {} + 2>/dev/null || true
+  done
+}
+
+truncate_logs() {
+  local pattern f
+  log "Mengosongkan log layanan (Nginx, Samba, CUPS, Unbound, Cloudflared, AdGuard, Shinobi, DB)..."
+  for pattern in "${LOG_GLOBS[@]}"; do
+    for f in $pattern; do
+      if [ -f "$f" ] && [ ! -L "$f" ]; then truncate -s 0 "$f" 2>/dev/null; fi
+    done
+  done
+  # log sistem besar di /var/log (di Armbian sering ada di RAM) + log lama terotasi
+  find /var/log -xdev -maxdepth 1 -type f -size +5M ! -name 'cleanup-stb.log' \
+    -exec truncate -s 0 {} + 2>/dev/null || true
+  find /var/log -xdev -type f \( -name "*.gz" -o -name "*.1" -o -name "*.old" \) -delete 2>/dev/null || true
+}
+
+clean_pm2_logs() {
+  local d u
+  log "Membersihkan log PM2 (root & semua user)..."
+  if command -v pm2 >/dev/null 2>&1; then
+    pm2 flush >/dev/null 2>&1 9>&- || true
+    for u in /home/*; do
+      [ -d "$u/.pm2" ] && su -s /bin/bash -l "$(basename "$u")" -c "pm2 flush >/dev/null 2>&1" 9>&- 2>/dev/null
+    done
+  fi
+  for d in /root/.pm2/logs /home/*/.pm2/logs; do
+    [ -d "$d" ] && find "$d" -xdev -type f -name '*.log' -exec truncate -s 0 {} + 2>/dev/null
+  done
+}
+
+vacuum_journal() {
+  log "Memangkas log systemd-journal (simpan ${JOURNAL_KEEP_TIME}, maks ${JOURNAL_KEEP_SIZE})..."
+  journalctl --vacuum-time="$JOURNAL_KEEP_TIME" --vacuum-size="$JOURNAL_KEEP_SIZE" >/dev/null 2>&1 || true
+}
+
+# Hanya query log, statistik & cache DNS. TIDAK menyentuh AdGuardHome.yaml,
+# folder filters/ (blocklist) dan sessions.db (login).
+clean_adguard() {
+  local mode="$1" data size_mb wd
+  systemctl is-active --quiet AdGuardHome 2>/dev/null || return 0
+  if [ ! -d "$ADGUARD_DIR/data" ]; then
+    wd=$(systemctl show -p WorkingDirectory --value AdGuardHome 2>/dev/null)
+    if [ -n "$wd" ] && [ -d "$wd/data" ]; then ADGUARD_DIR="$wd"; fi
+  fi
+  data="$ADGUARD_DIR/data"
+  if [ ! -d "$data" ]; then
+    warn "Folder data AdGuard Home tidak ditemukan, dilewati."
+    return 0
+  fi
+  size_mb=$(du -cm "$data"/querylog.json* "$data"/stats.db "$data"/cache.db 2>/dev/null | tail -n1 | cut -f1)
+  size_mb=${size_mb:-0}
+  if [ "$mode" = "auto" ] && [ "$size_mb" -lt "$ADGUARD_AUTO_RESET_MB" ]; then
+    log "AdGuard Home: log & statistik baru ${size_mb}MB (< ${ADGUARD_AUTO_RESET_MB}MB), dilewati agar DNS tidak terputus."
+    return 0
+  fi
+  log "Membersihkan Query Log, Statistik, & Cache AdGuard Home (${size_mb}MB)..."
+  systemctl stop AdGuardHome
+  rm -f "$data"/querylog.json* "$data"/stats.db "$data"/cache.db 2>/dev/null || true
+  systemctl start AdGuardHome
+  sleep 2
+  if systemctl is-active --quiet AdGuardHome; then
+    log "Selesai! AdGuard Home aktif lagi (pengaturan, blocklist & login tidak disentuh)."
+  else
+    warn "AdGuard Home TIDAK aktif setelah dibersihkan! Cek: systemctl status AdGuardHome"
+  fi
+}
+
+# Rapikan izin website tanpa mengubah yang sudah benar, lalu reload Nginx.
+# Bit eksekusi file dipertahankan. Reload hanya jika ada yang berubah (atau dipaksa).
+refresh_nginx_web() {
+  local force="${1:-true}" w parent owner n changed=0 rootmode
+  command -v nginx >/dev/null 2>&1 || return 0
+  log "Memeriksa izin akses folder website..."
+  rootmode=$(stat -c '%a' /root)
+  if [ $((rootmode % 2)) -eq 0 ]; then chmod 711 /root 2>/dev/null || true; fi
+  for w in "${WEB_DIRS[@]}"; do
+    [ -d "$w" ] || continue
+    parent="$(dirname "$w")"
+    owner="$(stat -c '%U' "$parent")"
+    chmod o+x "$parent" 2>/dev/null || true
+    n=$(find "$w" -xdev \( ! -user "$owner" -o ! -group www-data \) -print -exec chown -h "$owner":www-data {} + 2>/dev/null | wc -l)
+    changed=$((changed + n))
+    n=$(find "$w" -xdev -type d ! -perm 2755 -print -exec chmod 2755 {} + 2>/dev/null | wc -l)
+    changed=$((changed + n))
+    n=$(find "$w" -xdev -type f -perm /111 ! -perm 755 -print -exec chmod 755 {} + 2>/dev/null | wc -l)
+    changed=$((changed + n))
+    n=$(find "$w" -xdev -type f ! -perm /111 ! -perm 644 -print -exec chmod 644 {} + 2>/dev/null | wc -l)
+    changed=$((changed + n))
+  done
+  if [ "$force" = "true" ] || [ "$changed" -gt 0 ]; then
     if nginx -t >/dev/null 2>&1; then
       systemctl reload nginx
-      echo "[+] Berhasil! Izin file website diperbarui & Nginx telah di-reload."
+      log "Izin website dirapikan ($changed perubahan) & Nginx telah di-reload."
     else
-      echo "[-] Peringatan: Konfigurasi Nginx bermasalah, reload dibatalkan!"
+      warn "Konfigurasi Nginx bermasalah, reload dibatalkan!"
       nginx -t
     fi
   fi
 }
 
 # ------------------------------------------------------------------------------
-# MODE CEPAT (Dipanggil lewat perintah 'refresh-web'): Hanya Refresh Nginx
+# KHUSUS MODE PENUH (manual)
 # ------------------------------------------------------------------------------
-if [ "$MODE" = "--web-only" ]; then
-  refresh_nginx_web
-  exit 0
-fi
+clean_apt() {
+  local list
+  if [ "$PURGE_COMPILER" = "yes" ] && command -v n8n >/dev/null 2>&1; then
+    if dpkg -l | grep -qE "^ii\s+build-essential"; then
+      log "Menghapus build-essential (gcc/g++) untuk hemat ~200MB..."
+      apt-get remove --purge -y build-essential g++ gcc dpkg-dev >/dev/null 2>&1 || true
+    fi
+  fi
+  log "Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
+  list=$(apt-get -s autoremove --purge 2>/dev/null | awk '/^(Purg|Remv)/ {printf "%s ", $2}')
+  [ -n "$list" ] && log "Paket yatim yang dihapus: $list"
+  apt-get autoremove --purge -y >/dev/null 2>&1 || true
+  dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 || true
+  apt-get autoclean -y >/dev/null 2>&1 || true
+  apt-get clean -y >/dev/null 2>&1 || true
+  rm -rf /var/lib/apt/lists/*   # catatan: sebelum apt install berikutnya jalankan apt update
+}
+
+fix_swapfile() {
+  local swap_mb used_mb avail_mb
+  [ -f /swapfile ] || return 0
+  swap_mb=$(du -m /swapfile | cut -f1)
+  [ "$swap_mb" -gt $((SWAP_TARGET_MB + 76)) ] || return 0
+  used_mb=$(free -m | awk '/^Swap:/ {print $3}')
+  avail_mb=$(free -m | awk '/^Mem:/ {print $7}')
+  if [ "$used_mb" -ge $((avail_mb - 200)) ]; then
+    warn "Swap terpakai ${used_mb}MB & RAM tersedia ${avail_mb}MB: pengecilan swap ditunda agar tidak OOM."
+    return 0
+  fi
+  log "Mengecilkan /swapfile dari ${swap_mb}MB ke ${SWAP_TARGET_MB}MB..."
+  swapoff /swapfile 2>/dev/null || true
+  rm -f /swapfile
+  dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_TARGET_MB" status=none
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null 2>&1
+  swapon /swapfile
+}
+
+refresh_ram() {
+  local mode="$1" total avail
+  total=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  avail=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+  # mode otomatis: hanya saat RAM tersedia <= 15%
+  if [ "$mode" = "auto" ] && [ $((avail * 100 / total)) -gt 15 ]; then return 0; fi
+  log "Menyegarkan cache RAM sistem..."
+  sync && echo 3 > /proc/sys/vm/drop_caches
+}
 
 # ------------------------------------------------------------------------------
-# MODE PENUH (Saat dijalankan manual atau otomatis setiap 5 jam)
+# LAPORAN (hanya melaporkan, tidak mengubah apa pun)
 # ------------------------------------------------------------------------------
+check_services() {
+  local s
+  echo "Status layanan:"
+  for s in "${SERVICES[@]}"; do
+    systemctl list-unit-files "$s.service" 2>/dev/null | grep -q "^$s.service" || continue
+    systemctl is-enabled --quiet "$s" 2>/dev/null || continue
+    if systemctl is-active --quiet "$s"; then
+      echo "  [OK] $s"
+    else
+      echo "  [!!] $s TIDAK AKTIF"
+    fi
+  done
+}
 
-CURRENT_SCRIPT="$(readlink -f "$0")"
-if [ "$CURRENT_SCRIPT" != "$SCRIPT_PATH" ]; then
-  cp -f "$CURRENT_SCRIPT" "$SCRIPT_PATH"
-  chmod +x "$SCRIPT_PATH"
-  echo "[+] Menyalin script secara permanen ke $SCRIPT_PATH..."
-fi
+report_shinobi() {
+  local d
+  for d in /home/Shinobi/videos /opt/Shinobi/videos; do
+    [ -d "$d" ] && echo "  Rekaman Shinobi ($d): $(du -sh "$d" 2>/dev/null | cut -f1) - tidak dihapus script ini (atur retensi di Shinobi)"
+  done
+}
 
-# Buat shortcut perintah 'refresh-web' dan 'clean-stb' agar bisa dipanggil dari mana saja
+trim_log() {
+  local tmp
+  [ -f "$LOG_FILE" ] || return 0
+  tmp=$(mktemp)
+  tail -n 300 "$LOG_FILE" > "$tmp" && cat "$tmp" > "$LOG_FILE"
+  rm -f "$tmp"
+}
+
+setup_shortcuts_and_cron() {
+  local current
+  current="$(readlink -f "$0")"
+  if [ "$current" != "$SCRIPT_PATH" ]; then
+    cp -f "$current" "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+    log "Menyalin script secara permanen ke $SCRIPT_PATH..."
+  fi
+
+  # Shortcut perintah agar bisa dipanggil dari mana saja
 cat << 'EOS' > /usr/local/bin/refresh-web
 #!/bin/bash
 sudo /bin/bash /root/cleanup.sh --web-only
 EOS
-chmod +x /usr/local/bin/refresh-web
+  chmod +x /usr/local/bin/refresh-web
 
 cat << 'EOS' > /usr/local/bin/clean-stb
 #!/bin/bash
 sudo /bin/bash /root/cleanup.sh "$@"
 EOS
-chmod +x /usr/local/bin/clean-stb
+  chmod +x /usr/local/bin/clean-stb
 
-# Hapus file cron lama yang duplikat agar tidak bentrok
-rm -f /etc/cron.d/n8n-cleaner /etc/cron.d/n8n-download-limiter /etc/cron.daily/n8n-cleaner /usr/local/bin/n8n-cleaner.sh /usr/local/bin/limit-downloads /root/refresh.sh 2>/dev/null || true
+  # Hapus file cron lama yang duplikat agar tidak bentrok
+  rm -f /etc/cron.d/n8n-cleaner /etc/cron.d/n8n-download-limiter /etc/cron.daily/n8n-cleaner \
+        /usr/local/bin/n8n-cleaner.sh /usr/local/bin/limit-downloads /root/refresh.sh 2>/dev/null || true
 
-# 1. Fitur Otomatisasi Cron (Murni setiap 5 jam, TANPA batasan jumlah file)
-echo "[+] Memperbarui jadwal otomatis di Cron (Setiap 5 Jam, Tanpa Batas Jumlah File)..."
-(
-  crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" || true
-  echo "0 */5 * * * /bin/bash $SCRIPT_PATH >/dev/null 2>&1"
-) | crontab -
-echo "[+] Berhasil! Pembersihan otomatis tiap 5 jam telah aktif."
+  if command -v crontab >/dev/null 2>&1; then
+    log "Memperbarui jadwal otomatis di Cron (setiap 5 jam, mode --auto yang ringan & aman)..."
+    (
+      crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" || true
+      echo "0 */5 * * * /bin/bash $SCRIPT_PATH --auto >> $LOG_FILE 2>&1"
+    ) | crontab -
+    log "Berhasil! Pembersihan otomatis tiap 5 jam aktif (riwayat: $LOG_FILE)."
+  else
+    warn "cron belum terpasang. Pasang dengan: apt install -y cron"
+  fi
+}
 
-echo "[+] Memulai pembersihan menyeluruh sistem Armbian..."
-echo "--------------------------------------------------"
+# ------------------------------------------------------------------------------
+# ALUR UTAMA
+# ------------------------------------------------------------------------------
+# Cegah dua pembersihan berjalan bersamaan
+exec 9>/run/cleanup-stb.lock
+if ! flock -n 9; then
+  echo "[-] Pembersihan lain sedang berjalan, dibatalkan."
+  exit 0
+fi
+
+# MODE CEPAT: hanya refresh Nginx
+if [ "$MODE" = "--web-only" ]; then
+  refresh_nginx_web true
+  exit 0
+fi
+
+# MODE OTOMATIS (cron tiap 5 jam): ringan, tidak mengubah paket/swap/izin tanpa perlu
+if [ "$MODE" = "--auto" ]; then
+  echo "=== $(date '+%F %T') | pembersihan otomatis ==="
+  BEFORE="$(show_disk)"
+  clean_download_dirs false
+  clean_yt_temp auto
+  clean_caches
+  truncate_logs
+  clean_pm2_logs
+  vacuum_journal
+  clean_tmp 1440
+  clean_adguard auto
+  refresh_nginx_web false
+  refresh_ram auto
+  echo "Sebelum: $BEFORE"
+  echo "Sesudah: $(show_disk)"
+  check_services
+  trim_log
+  exit 0
+fi
+
+# MODE PENUH (manual): clean-stb  /  clean-stb --all
+setup_shortcuts_and_cron
+
+log "Memulai pembersihan menyeluruh sistem Armbian..."
+sep
 echo "Kapasitas SEBELUM pembersihan:"
-df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
-echo "--------------------------------------------------"
+show_disk
+sep
 
-# 2. Pastikan Swap kembali ke ukuran ideal 1GB (1024MB) jika memakai /swapfile > 1.1GB
-if [ -f /swapfile ]; then
-  SWAP_MB=$(du -m /swapfile | cut -f1)
-  if [ "$SWAP_MB" -gt 1100 ]; then
-    echo "[+] Mengecilkan /swapfile dari ${SWAP_MB}MB kembali ke default 1024MB (1GB)..."
-    swapoff /swapfile 2>/dev/null || true
-    rm -f /swapfile
-    dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
-    chmod 600 /swapfile
-    mkswap /swapfile >/dev/null 2>&1
-    swapon /swapfile
-  fi
-fi
+fix_swapfile
 
-# 3. Membersihkan file unduhan / binary tersimpan n8n
 if [ "$MODE" = "--all" ]; then
-  echo "[+] Menghapus SEMUA file unduhan & binary tersimpan n8n (Mode Paksa)..."
-  clean_n8n_files "true"
+  log "Menghapus SEMUA file unduhan & binary tersimpan n8n (Mode Paksa)..."
+  clean_download_dirs true
 else
-  echo "[+] Menghapus file unduhan & binary tersimpan n8n yang berumur > 5 jam..."
-  clean_n8n_files "false"
+  log "Menghapus file unduhan & binary tersimpan n8n yang berumur > ${KEEP_HOURS} jam..."
+  clean_download_dirs false
 fi
 
-# 4. Hapus paket kompilator (build-essential ~200MB) HANYA jika n8n sudah terinstal
-if command -v n8n >/dev/null 2>&1; then
-  if dpkg -l | grep -qE "^ii\s+build-essential"; then
-    echo "[+] n8n sudah terinstal! Menghapus build-essential (gcc/g++) untuk hemat ~200MB..."
-    apt-get remove --purge -y build-essential g++ gcc dpkg-dev >/dev/null 2>&1 || true
-  fi
-fi
+clean_yt_temp all
+clean_apt
+clean_caches
+truncate_logs
+clean_pm2_logs
+vacuum_journal
+clean_tmp 60
+clean_adguard full
+refresh_nginx_web true
+refresh_ram full
 
-# 5. Membersihkan cache package APT, file .deb sisa, dan orphan packages
-echo "[+] Membersihkan cache APT, paket sisa, dan konfigurasi usang (rc)..."
-apt-get autoremove --purge -y >/dev/null 2>&1 || true
-dpkg -l | awk '/^rc/ {print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 || true
-apt-get autoclean -y >/dev/null 2>&1 || true
-apt-get clean -y >/dev/null 2>&1 || true
-rm -rf /var/lib/apt/lists/*
-
-# 6. Membersihkan cache NPM secara langsung
-echo "[+] Membersihkan cache NPM (root & semua user)..."
-rm -rf /root/.npm /home/*/.npm /root/.node-gyp /home/*/.node-gyp 2>/dev/null || true
-
-# 7. Memangkas log system (Systemd Journal & PostgreSQL log lama)
-echo "[+] Memangkas log systemd-journal & log sistem..."
-journalctl --vacuum-time=1d --vacuum-size=5M 2>/dev/null || true
-find /var/log -type f \( -name "*.gz" -o -name "*.1" -o -name "*.old" \) -delete 2>/dev/null || true
-truncate -s 0 /var/log/postgresql/*.log 2>/dev/null || true
-truncate -s 0 /var/log/nginx/*.log 2>/dev/null || true
-
-# 8. Membersihkan file temporary di /tmp dan /var/tmp (Aman untuk server MOCP)
-echo "[+] Membersihkan file temporary (/tmp dan /var/tmp) tanpa memutus MOCP..."
-find /tmp -mindepth 1 -maxdepth 1 ! -name 'moc*' ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
-find /var/tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private*' -exec rm -rf {} + 2>/dev/null || true
-
-# 9. Membersihkan Query Log, Statistik, & Cache AdGuard Home secara Total (File-based)
-if systemctl is-active --quiet AdGuardHome; then
-  echo "[+] Membersihkan Query Log, Statistik, dan Cache AdGuard Home..."
-  systemctl stop AdGuardHome
-  rm -f /opt/AdGuardHome/data/querylog.json* 2>/dev/null || true
-  rm -f /opt/AdGuardHome/data/stats.db 2>/dev/null || true
-  rm -f /opt/AdGuardHome/data/cache.db 2>/dev/null || true
-  systemctl start AdGuardHome
-  echo "[+] Selesai! Statistik AdGuard Home telah di-reset ke 0."
-fi
-
-# 10. Membersihkan PM2 log (untuk root dan untuk user biasa seperti dadi)
-if command -v pm2 &> /dev/null; then
-  echo "[+] Membersihkan log PM2 (root & user n8n)..."
-  pm2 flush > /dev/null 2>&1 || true
-  find /root/.pm2/logs -type f -name "*.log" -exec truncate -s 0 {} + 2>/dev/null || true
-  for u in /home/*; do
-    USERNAME=$(basename "$u")
-    if [ -d "$u/.pm2" ]; then
-      su - "$USERNAME" -c "pm2 flush >/dev/null 2>&1" || true
-      find "$u/.pm2/logs" -type f -name "*.log" -exec truncate -s 0 {} + 2>/dev/null || true
-    fi
-  done
-fi
-
-# 11. Refresh Izin Akses Website & Reload Nginx
-refresh_nginx_web
-
-# 12. Membersihkan cache user lokal TANPA menghapus cache UI n8n (.cache/n8n)
-echo "[+] Membersihkan cache user lokal (aman untuk UI n8n)..."
-find /root/.cache -mindepth 1 -maxdepth 1 ! -name 'n8n' -exec rm -rf {} + 2>/dev/null || true
-for u in /home/*; do
-  if [ -d "$u/.cache" ]; then
-    find "$u/.cache" -mindepth 1 -maxdepth 1 ! -name 'n8n' -exec rm -rf {} + 2>/dev/null || true
-  fi
-done
-
-# 13. Menyegarkan RAM Cache
-echo "[+] Menyegarkan cache RAM sistem..."
-sync && echo 3 > /proc/sys/vm/drop_caches
-
-echo "--------------------------------------------------"
+sep
 echo "Kapasitas SESUDAH pembersihan:"
-df -h / | awk 'NR==2 {print "Terpakai: " $3 " dari " $2 " (" $5 ") - Sisa: " $4}'
-echo "--------------------------------------------------"
+show_disk
+sep
 echo "Status RAM & Swap Saat Ini:"
 free -h
-echo "--------------------------------------------------"
-echo "[+] PEMBERSIHAN & REFRESH NGINX SELESAI!"
-echo "[+] Jadwal otomatis: Tiap 5 jam (Tanpa batas jumlah file)."
-echo "[+] Perintah cepat : 'clean-stb' (bersih >5 jam) | 'clean-stb --all' (sapu bersih semua file sekarang) | 'refresh-web' (reload Nginx)."
-echo "--------------------------------------------------"
+sep
+check_services
+report_shinobi
+sep
+log "PEMBERSIHAN & REFRESH SELESAI! Pengaturan layanan tidak diubah."
+log "Jadwal otomatis : tiap 5 jam (mode --auto, riwayat di $LOG_FILE)."
+log "Perintah cepat  : 'clean-stb' (bersih penuh) | 'clean-stb --all' (hapus semua unduhan n8n) | 'refresh-web' (izin web + Nginx)."
+sep
 EOF
 
 sudo chmod +x /root/cleanup.sh
