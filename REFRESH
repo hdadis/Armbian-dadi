@@ -107,7 +107,12 @@ is_remote_fs() {
   return 1
 }
 
-yt_running() { pgrep -f 'yt-dlp' >/dev/null 2>&1; }
+# Hanya proses yt-dlp yang sebenarnya (perintah diawali .../yt-dlp, atau python .../yt-dlp).
+# Proses lain yang kebetulan memuat kata "yt-dlp" (grep, tail, shell, dll) TIDAK dihitung.
+yt_running() {
+  YT_PIDS=$(pgrep -f '^([^ ]*python[0-9.]* )?[^ ]*/yt-dlp( |$)' 2>/dev/null | tr '\n' ' ')
+  [ -n "$YT_PIDS" ]
+}
 
 # ------------------------------------------------------------------------------
 # PEMBERSIHAN
@@ -135,7 +140,7 @@ clean_yt_temp() {
   local mode="$1"
   [ -d /var/tmp/yt ] || [ -d /var/tmp/yt-logs ] || return 0
   if yt_running; then
-    log "yt-dlp masih berjalan, file sementara & log unduhan YouTube dilewati."
+    log "yt-dlp masih berjalan (PID: ${YT_PIDS}), file sementara & log unduhan YouTube dilewati."
     return 0
   fi
   log "Membersihkan file sementara & log unduhan YouTube..."
