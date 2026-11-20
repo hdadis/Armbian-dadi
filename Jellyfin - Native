@@ -1,18 +1,61 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Jellyfin Native Installer for Armbian (eMMC Mode - HG680P / ARM64)
-# - Memasang Jellyfin native dari repositori resmi (deb822)
-# - Memakai path standar eMMC (/var/lib/jellyfin & /var/cache/jellyfin)
-# - Mengalihkan log & TMPDIR ke eMMC (menghindari limit tmpfs & armbian-ramlog)
+# Jellyfin Native Installer v3 untuk Armbian / Debian / Ubuntu (HG680P RAM 1 GB)
+#
+# Mode default: install ke eMMC (path bawaan Debian, TANPA relokasi data)
+#   - data   : /var/lib/jellyfin
+#   - cache  : /var/cache/jellyfin
+#   - log    : /var/log/jellyfin
+#   - tmp    : /run/jellyfin-tmp (tmpfs/RAM, hemat tulis eMMC)
+# Film dibaca dari server (NFS/SMB/sshfs) -> di-mount read-only ke /mnt/media
+#
+# Fitur:
+#   - Repositori resmi Jellyfin (deb822)
+#   - Batas RAM (MemoryHigh/Max) + OOMScoreAdjust agar layanan lain aman
+#   - Tuning .NET GC hemat memori
+#   - ZRAM otomatis bila swap belum ada
+#   - Cek sisa ruang eMMC sebelum instal
+#   - Mount media otomatis (fstab + automount, nofail)
+#
+# Pemakaian:
+#   sudo bash install-jellyfin.sh                 # eMMC (default)
+#   sudo bash install-jellyfin.sh /mnt/External/jellyfin   # relokasi ke disk lain
+#
+# Variabel opsional (env):
+#   JELLYFIN_BASE_DIR  relokasi data/cache/log ke path ini (kosong = eMMC)
+#   JELLYFIN_MEM_HIGH  mis. 420M   (default 45% total RAM)
+#   JELLYFIN_MEM_MAX   mis. 560M   (default 60% total RAM)
+#   SETUP_ZRAM=0       jangan pasang ZRAM otomatis (default 1)
+#   FORCE=1            lanjut walau ruang eMMC kurang / filesystem jaringan
+#
+#   MEDIA_MODE         auto | cifs | nfs | sshfs | none   (default auto)
+#   MEDIA_SERVER       default 192.168.18.2
+#   MEDIA_REMOTE       default /mnt/External/Media
+#   MEDIA_MOUNT        default /mnt/media
+#   MEDIA_SMB_SHARE    nama share SMB (default: deteksi otomatis)
+#   MEDIA_SMB_USER / MEDIA_SMB_PASS   akun Samba (default sudah terisi)
+#   MEDIA_SSH_USER     user SSH untuk mode sshfs (default root)
+#   MEDIA_SSH_KEY      private key untuk mode sshfs (default /root/.ssh/id_ed25519)
 # ==============================================================================
 
 set -euo pipefail
 
-JELLYFIN_DATA_DIR="/var/lib/jellyfin"
-JELLYFIN_CACHE_DIR="/var/cache/jellyfin"
-JELLYFIN_LOG_DIR="/var/lib/jellyfin/log"
-JELLYFIN_TMP_DIR="/var/lib/jellyfin/tmp"
+JELLYFIN_BASE_DIR="${1:-${JELLYFIN_BASE_DIR:-}}"
+SETUP_ZRAM="${SETUP_ZRAM:-1}"
+FORCE="${FORCE:-0}"
 
+MEDIA_MODE="${MEDIA_MODE:-auto}"          # auto = SMB dulu, lalu NFS
+MEDIA_SERVER="${MEDIA_SERVER:-192.168.18.2}"
+MEDIA_REMOTE="${MEDIA_REMOTE:-/mnt/External/Media}"   # dipakai mode nfs/sshfs
+MEDIA_MOUNT="${MEDIA_MOUNT:-/mnt/media}"
+MEDIA_SMB_SHARE="${MEDIA_SMB_SHARE:-}"    # kosong = deteksi otomatis share yang berisi folder Movie
+MEDIA_SMB_USER="${MEDIA_SMB_USER:-dadi}"
+DEFAULT_SMB_PASS='980123Abc!$'
+MEDIA_SMB_PASS="${MEDIA_SMB_PASS:-${DEFAULT_SMB_PASS}}"
+MEDIA_SSH_USER="${MEDIA_SSH_USER:-root}"
+MEDIA_SSH_KEY="${MEDIA_SSH_KEY:-/root/.ssh/id_ed25519}"
+
+# Warna output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -24,7 +67,17 @@ ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-# 1. Validasi root
+# Tulis/ubah KEY="val" di file env tanpa menghapus baris lain
+set_env_var() {
+    local file="$1" key="$2" val="$3"
+    if grep -qE "^#?[[:space:]]*${key}=" "${file}"; then
+        sed -i -E "s|^#?[[:space:]]*${key}=.*|${key}=\"${val}\"|" "${file}"
+    else
+        echo "${key}=\"${val}\"" >> "${file}"
+    fi
+}
+
+# 1. Validasi hak akses root
 if [[ "${EUID}" -ne 0 ]]; then
     err "Script ini harus dijalankan sebagai root (gunakan sudo)."
     exit 1
@@ -32,7 +85,7 @@ fi
 
 # 2. Deteksi OS & Arsitektur
 if [[ ! -f /etc/os-release ]]; then
-    err "File /etc/os-release tidak ditemukan."
+    err "File /etc/os-release tidak ditemukan. OS tidak dikenali."
     exit 1
 fi
 
@@ -46,7 +99,7 @@ if [[ "${VERSION_OS}" != "debian" && "${VERSION_OS}" != "ubuntu" ]]; then
     elif [[ "${ID_LIKE:-}" == *"debian"* ]]; then
         VERSION_OS="debian"
     else
-        err "OS '${ID}' tidak didukung. Khusus Debian/Ubuntu/Armbian."
+        err "OS '${ID}' tidak didukung. Script ini khusus Debian/Ubuntu/Armbian."
         exit 1
     fi
 fi
@@ -59,19 +112,100 @@ if [[ -z "${VERSION_CODENAME}" ]]; then
     exit 1
 fi
 
-# 3. Cek sisa ruang eMMC (/)
-AVAIL_KB="$(df --output=avail -k / | tail -n 1 | tr -d ' ')"
-AVAIL_MB="$((AVAIL_KB / 1024))"
-
-info "Target OS   : ${VERSION_OS} (${VERSION_CODENAME}) [${ARCH}]"
-info "Target Mode : eMMC (${JELLYFIN_DATA_DIR})"
-info "Sisa eMMC / : ${AVAIL_MB} MB"
-
-if (( AVAIL_KB < 2621440 )); then
-    warn "Sisa ruang eMMC kurang dari 2.5 GB. Jellyfin 10.11+ butuh minimal 2 GB ruang kosong untuk start."
+# Mode penyimpanan: eMMC (default Debian) atau relokasi
+if [[ -z "${JELLYFIN_BASE_DIR}" ]]; then
+    RELOCATE=0
+    DATA_DIR="/var/lib/jellyfin"
+    CACHE_DIR="/var/cache/jellyfin"
+    LOG_DIR="/var/log/jellyfin"
+else
+    RELOCATE=1
+    DATA_DIR="${JELLYFIN_BASE_DIR}/data"
+    CACHE_DIR="${JELLYFIN_BASE_DIR}/cache"
+    LOG_DIR="${JELLYFIN_BASE_DIR}/log"
 fi
 
-# 4. Pasang Repositori Resmi Jellyfin (deb822)
+# RAM total (MB) -> dasar batas memori Jellyfin
+MEM_TOTAL_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
+MEM_TOTAL_MB="$((MEM_TOTAL_KB / 1024))"
+JELLYFIN_MEM_HIGH="${JELLYFIN_MEM_HIGH:-$((MEM_TOTAL_MB * 45 / 100))M}"
+JELLYFIN_MEM_MAX="${JELLYFIN_MEM_MAX:-$((MEM_TOTAL_MB * 60 / 100))M}"
+
+info "Target OS      : ${VERSION_OS} (${VERSION_CODENAME}) [${ARCH}]"
+if (( RELOCATE == 1 )); then
+    info "Mode storage   : relokasi ke ${JELLYFIN_BASE_DIR}"
+else
+    info "Mode storage   : eMMC (path bawaan /var/lib, /var/cache, /var/log)"
+fi
+info "RAM total      : ${MEM_TOTAL_MB} MB -> MemoryHigh=${JELLYFIN_MEM_HIGH}, MemoryMax=${JELLYFIN_MEM_MAX}"
+
+# 3. Validasi Mount Point, Filesystem, dan Kapasitas Disk
+CHECK_DIR="${DATA_DIR}"
+while [[ ! -d "${CHECK_DIR}" ]]; do
+    CHECK_DIR="$(dirname "${CHECK_DIR}")"
+done
+
+MOUNT_POINT="$(df --output=target "${CHECK_DIR}" | tail -n 1)"
+FS_TYPE="$(df --output=fstype "${CHECK_DIR}" | tail -n 1 | tr -d ' ')"
+AVAIL_KB="$(df --output=avail -k "${CHECK_DIR}" | tail -n 1 | tr -d ' ')"
+AVAIL_MB="$((AVAIL_KB / 1024))"
+
+info "Mount Point    : ${MOUNT_POINT} (Filesystem: ${FS_TYPE}, Sisa: ~${AVAIL_MB} MB)"
+
+# 3a. Tolak filesystem jaringan untuk data: SQLite (library.db) sering lock/korup
+if [[ "${FS_TYPE}" =~ ^(fuse\.sshfs|sshfs|cifs|smb3|smbfs|nfs|nfs4|9p|fuse\.rclone)$ ]]; then
+    err "Filesystem '${FS_TYPE}' adalah filesystem jaringan."
+    err "Database SQLite Jellyfin tidak stabil di sshfs/SMB/NFS. Data harus di disk lokal."
+    if [[ "${FORCE}" != "1" ]]; then
+        err "Batal. Jalankan dengan FORCE=1 hanya jika benar-benar yakin."
+        exit 1
+    fi
+    warn "FORCE=1 aktif, melanjutkan dengan risiko sendiri."
+fi
+
+# 3b. Ruang kosong (Jellyfin 10.11+ butuh minimal 2 GB bebas di folder data)
+if (( AVAIL_KB < 2097152 )); then
+    err "Ruang kosong hanya ~${AVAIL_MB} MB. Jellyfin 10.11+ butuh minimal 2 GB bebas."
+    err "Bersihkan eMMC dulu (apt-get clean, hapus log/cache lama) atau pakai storage lain."
+    if [[ "${FORCE}" != "1" ]]; then
+        exit 1
+    fi
+    warn "FORCE=1 aktif, melanjutkan walau ruang kurang (Jellyfin bisa gagal start)."
+elif (( AVAIL_KB < 3145728 )); then
+    warn "Ruang kosong ~${AVAIL_MB} MB (< 3 GB). Cukup tipis; pantau pertumbuhan folder metadata."
+fi
+
+if [[ "${FS_TYPE}" =~ ^(ntfs|ntfs3|fuseblk|vfat|exfat)$ ]]; then
+    warn "Filesystem '${FS_TYPE}' terdeteksi. Permission Linux tidak normal di NTFS/FAT; sebaiknya ext4."
+fi
+
+# 4. Swap/ZRAM: wajib untuk RAM 1 GB
+SWAP_TOTAL="$(awk '/SwapTotal/ {print $2}' /proc/meminfo)"
+if (( SWAP_TOTAL > 0 )); then
+    ok "Swap/ZRAM sudah aktif ($((SWAP_TOTAL / 1024)) MB)."
+elif [[ "${SETUP_ZRAM}" == "1" ]]; then
+    info "Swap belum aktif, memasang ZRAM (zram-tools)..."
+    apt-get update -qq
+    if apt-get install -y --no-install-recommends zram-tools; then
+        if [[ -f /etc/default/zramswap ]]; then
+            set_env_var /etc/default/zramswap ALGO "zstd"
+            set_env_var /etc/default/zramswap PERCENT "50"
+        fi
+        systemctl enable --now zramswap 2>/dev/null || warn "Gagal mengaktifkan zramswap, cek manual."
+        SWAP_TOTAL="$(awk '/SwapTotal/ {print $2}' /proc/meminfo)"
+        if (( SWAP_TOTAL > 0 )); then
+            ok "ZRAM aktif ($((SWAP_TOTAL / 1024)) MB)."
+        else
+            warn "ZRAM belum terdeteksi aktif. Aktifkan manual sebelum memakai Jellyfin."
+        fi
+    else
+        warn "Gagal memasang zram-tools. Aktifkan swap/ZRAM secara manual."
+    fi
+else
+    warn "Swap/ZRAM tidak aktif dan SETUP_ZRAM=0. Sangat berisiko di RAM 1 GB."
+fi
+
+# 5. Pasang Repositori Resmi Jellyfin (deb822)
 info "Memasang dependensi dan repositori resmi Jellyfin..."
 apt-get update -qq
 apt-get install -y --no-install-recommends curl gnupg ca-certificates
@@ -89,17 +223,14 @@ Architectures: ${ARCH}
 Signed-By: /etc/apt/keyrings/jellyfin.gpg
 EOF
 
-# 5. Install Jellyfin Native
+# 6. Install Jellyfin Native
 info "Menginstal paket jellyfin..."
 apt-get update -qq
 apt-get install -y jellyfin
+apt-get clean   # kosongkan cache .deb agar eMMC lega
 
-# 6. Siapkan folder log & tmp di eMMC (bypass ramlog 50MB & tmpfs)
-info "Mengalihkan log dan TMPDIR ke eMMC..."
+# 7. Hentikan service; relokasi data hanya bila diminta
 systemctl stop jellyfin || true
-
-mkdir -p "${JELLYFIN_DATA_DIR}" "${JELLYFIN_CACHE_DIR}" "${JELLYFIN_LOG_DIR}" "${JELLYFIN_TMP_DIR}"
-chown -R jellyfin:jellyfin "${JELLYFIN_DATA_DIR}" "${JELLYFIN_CACHE_DIR}"
 
 DEFAULT_FILE="/etc/default/jellyfin"
 if [[ -f "${DEFAULT_FILE}" ]]; then
@@ -108,59 +239,237 @@ else
     touch "${DEFAULT_FILE}"
 fi
 
-set_env_var() {
-    local file="$1"
-    local key="$2"
-    local val="$3"
-    if grep -qE "^#?[[:space:]]*${key}=" "${file}"; then
-        sed -i -E "s|^#?[[:space:]]*${key}=.*|${key}=\"${val}\"|" "${file}"
-    else
-        echo "${key}=\"${val}\"" >> "${file}"
+if (( RELOCATE == 1 )); then
+    info "Merelokasi data ke ${JELLYFIN_BASE_DIR}..."
+    mkdir -p "${DATA_DIR}" "${CACHE_DIR}" "${LOG_DIR}"
+
+    if [[ -d /var/lib/jellyfin ]] && [[ -z "$(ls -A "${DATA_DIR}")" ]]; then
+        cp -a /var/lib/jellyfin/. "${DATA_DIR}/" 2>/dev/null || true
     fi
+
+    if ! chown -R jellyfin:jellyfin "${JELLYFIN_BASE_DIR}" 2>/dev/null; then
+        warn "chown ke jellyfin:jellyfin gagal (normal pada NTFS/exFAT). Cek izin secara manual."
+    fi
+
+    set_env_var "${DEFAULT_FILE}" "JELLYFIN_DATA_DIR"  "${DATA_DIR}"
+    set_env_var "${DEFAULT_FILE}" "JELLYFIN_CACHE_DIR" "${CACHE_DIR}"
+    set_env_var "${DEFAULT_FILE}" "JELLYFIN_LOG_DIR"   "${LOG_DIR}"
+else
+    ok "Data tetap di path bawaan eMMC (tidak ada relokasi)."
+fi
+
+# 8. Mount folder media dari server (read-only, tidak menghambat boot)
+LIBRARY_PATH="${MEDIA_MOUNT}/Movie"
+SMB_CRED_FILE="/etc/jellyfin-smb.cred"
+FOUND_SHARE=""
+FOUND_SUB=""
+
+write_smb_cred() {
+    ( umask 077
+      printf 'username=%s\npassword=%s\n' "${MEDIA_SMB_USER}" "${MEDIA_SMB_PASS}" > "${SMB_CRED_FILE}" )
+    chmod 600 "${SMB_CRED_FILE}"
 }
 
-set_env_var "${DEFAULT_FILE}" "JELLYFIN_DATA_DIR"  "${JELLYFIN_DATA_DIR}"
-set_env_var "${DEFAULT_FILE}" "JELLYFIN_CACHE_DIR" "${JELLYFIN_CACHE_DIR}"
-set_env_var "${DEFAULT_FILE}" "JELLYFIN_LOG_DIR"   "${JELLYFIN_LOG_DIR}"
-set_env_var "${DEFAULT_FILE}" "TMPDIR"             "${JELLYFIN_TMP_DIR}"
+# Cari share Samba yang berisi folder Movie (langsung, atau di dalam Media/)
+find_smb_share() {
+    local -a candidates=()
+    local -A seen=()
+    local tmp share type name rest
 
-# 7. Systemd override agar ramah RAM/CPU STB dan menerapkan TMPDIR
+    if [[ -n "${MEDIA_SMB_SHARE}" ]]; then
+        candidates+=("${MEDIA_SMB_SHARE}")
+    else
+        if command -v smbclient >/dev/null 2>&1; then
+            while IFS='|' read -r type name rest; do
+                if [[ "${type}" == "Disk" && "${name}" != *'$' ]]; then
+                    candidates+=("${name}")
+                fi
+            done < <(smbclient -L "//${MEDIA_SERVER}" -A "${SMB_CRED_FILE}" -g 2>/dev/null || true)
+        fi
+        candidates+=(Media media External Movie)
+    fi
+
+    tmp="$(mktemp -d)"
+    for share in "${candidates[@]}"; do
+        [[ -n "${seen[$share]:-}" ]] && continue
+        seen["$share"]=1
+        if timeout 25 mount -t cifs "//${MEDIA_SERVER}/${share}" "${tmp}" \
+            -o "ro,credentials=${SMB_CRED_FILE},uid=jellyfin,gid=jellyfin" 2>/dev/null; then
+            if [[ -d "${tmp}/Movie" ]]; then
+                FOUND_SHARE="${share}"; FOUND_SUB="Movie"
+            elif [[ -d "${tmp}/Media/Movie" ]]; then
+                FOUND_SHARE="${share}"; FOUND_SUB="Media/Movie"
+            fi
+            umount "${tmp}" 2>/dev/null || true
+            [[ -n "${FOUND_SHARE}" ]] && break
+        fi
+    done
+    rmdir "${tmp}" 2>/dev/null || true
+    [[ -n "${FOUND_SHARE}" ]]
+}
+
+setup_media() {
+    if [[ "${MEDIA_MODE}" == "none" ]]; then
+        info "MEDIA_MODE=none, lewati setup mount media."
+        return 0
+    fi
+
+    info "Menyiapkan mount media dari ${MEDIA_SERVER} -> ${MEDIA_MOUNT}"
+    mkdir -p "${MEDIA_MOUNT}"
+
+    # Bersihkan entri lama buatan script ini (komentar penanda + 1 baris di bawahnya)
+    sed -i '/^# jellyfin-media$/,+1d' /etc/fstab
+
+    local mode="${MEDIA_MODE}" line="" opts=""
+
+    # --- SMB/CIFS (Samba dengan akun) ---
+    if [[ "${mode}" == "auto" || "${mode}" == "cifs" ]]; then
+        if apt-get install -y --no-install-recommends cifs-utils smbclient >/dev/null 2>&1; then
+            write_smb_cred
+            if find_smb_share; then
+                mode="cifs"
+                opts="ro,credentials=${SMB_CRED_FILE},uid=jellyfin,gid=jellyfin,file_mode=0444,dir_mode=0555,iocharset=utf8,_netdev,nofail,x-systemd.automount,x-systemd.idle-timeout=300"
+                line="//${MEDIA_SERVER}/${FOUND_SHARE// /\\040} ${MEDIA_MOUNT} cifs ${opts} 0 0"
+                LIBRARY_PATH="${MEDIA_MOUNT}/${FOUND_SUB}"
+                ok "SMB berhasil: share '${FOUND_SHARE}' (folder film: ${FOUND_SUB})."
+            else
+                warn "Share Samba berisi folder 'Movie' tidak ditemukan (cek user/password & nama share)."
+                warn "Tentukan manual: MEDIA_SMB_SHARE=NamaShare sudo -E bash install-jellyfin.sh"
+            fi
+        else
+            warn "Gagal memasang cifs-utils/smbclient."
+        fi
+    fi
+
+    # --- NFS (fallback pada mode auto) ---
+    if [[ -z "${line}" && ( "${mode}" == "auto" || "${mode}" == "nfs" ) ]]; then
+        if apt-get install -y --no-install-recommends nfs-common >/dev/null 2>&1; then
+            if timeout 25 mount -t nfs -o ro,soft,timeo=50,retrans=2 \
+                "${MEDIA_SERVER}:${MEDIA_REMOTE}" "${MEDIA_MOUNT}" 2>/dev/null; then
+                umount "${MEDIA_MOUNT}" 2>/dev/null || true
+                mode="nfs"
+                opts="ro,soft,timeo=50,retrans=2,_netdev,nofail,x-systemd.automount,x-systemd.idle-timeout=300"
+                line="${MEDIA_SERVER}:${MEDIA_REMOTE} ${MEDIA_MOUNT} nfs ${opts} 0 0"
+                LIBRARY_PATH="${MEDIA_MOUNT}/Movie"
+                ok "NFS berhasil diuji."
+            else
+                [[ "${mode}" == "nfs" ]] && warn "Tes mount NFS gagal (cek /etc/exports di server)."
+            fi
+        else
+            warn "Gagal memasang nfs-common."
+        fi
+    fi
+
+    # --- sshfs (hanya bila diminta eksplisit; lebih berat di CPU STB) ---
+    if [[ -z "${line}" && "${mode}" == "sshfs" ]]; then
+        if apt-get install -y --no-install-recommends sshfs >/dev/null 2>&1; then
+            grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo "user_allow_other" >> /etc/fuse.conf
+            opts="ro,allow_other,_netdev,nofail,x-systemd.automount,x-systemd.idle-timeout=300,reconnect,ServerAliveInterval=15,IdentityFile=${MEDIA_SSH_KEY},StrictHostKeyChecking=accept-new"
+            line="${MEDIA_SSH_USER}@${MEDIA_SERVER}:${MEDIA_REMOTE} ${MEDIA_MOUNT} fuse.sshfs ${opts} 0 0"
+            LIBRARY_PATH="${MEDIA_MOUNT}/Movie"
+            warn "Mode sshfs: pastikan key '${MEDIA_SSH_KEY}' sudah terdaftar di server."
+        else
+            warn "Gagal memasang sshfs."
+        fi
+    fi
+
+    if [[ -z "${line}" ]]; then
+        warn "Mount media otomatis gagal dibuat. Jellyfin tetap terpasang."
+        warn "Atur manual: tambahkan baris mount ke /etc/fstab lalu 'mount ${MEDIA_MOUNT}'."
+        return 0
+    fi
+
+    {
+        echo "# jellyfin-media"
+        echo "${line}"
+    } >> /etc/fstab
+
+    systemctl daemon-reload
+    if timeout 25 ls "${LIBRARY_PATH}" >/dev/null 2>&1; then
+        ok "Film terbaca di ${LIBRARY_PATH} (mode: ${mode})."
+        ls "${LIBRARY_PATH}" | head -n 10 | sed 's/^/        /'
+    else
+        warn "Folder film belum terbaca di ${LIBRARY_PATH}. Cek: journalctl -b | grep -i -E 'cifs|mount'"
+    fi
+}
+setup_media || warn "Setup media mengalami masalah, lanjut ke langkah berikutnya."
+
+# 9. Cek dukungan cgroup memory (untuk MemoryHigh/MemoryMax)
+CGROUP_MEM_OK=0
+if grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null || [[ -d /sys/fs/cgroup/memory ]]; then
+    CGROUP_MEM_OK=1
+else
+    warn "Controller cgroup 'memory' tidak aktif, MemoryHigh/MemoryMax akan diabaikan."
+    warn "Solusi Armbian: tambahkan 'extraargs=cgroup_enable=memory swapaccount=1' di /boot/armbianEnv.txt lalu reboot."
+fi
+
+# 10. Systemd Drop-in Override
 info "Membuat systemd override..."
 OVERRIDE_DIR="/etc/systemd/system/jellyfin.service.d"
 mkdir -p "${OVERRIDE_DIR}"
 
-cat <<EOF > "${OVERRIDE_DIR}/override.conf"
-[Service]
-Environment="TMPDIR=${JELLYFIN_TMP_DIR}"
-Nice=5
-IOSchedulingClass=best-effort
-IOSchedulingPriority=6
-EOF
+{
+    echo "[Unit]"
+    echo "After=local-fs.target network-online.target"
+    if (( RELOCATE == 1 )) && [[ "${MOUNT_POINT}" != "/" ]]; then
+        echo "RequiresMountsFor=${MOUNT_POINT}"
+    fi
+    echo "StartLimitIntervalSec=600"
+    echo "StartLimitBurst=5"
+    echo ""
+    echo "[Service]"
+    echo "# TMPDIR di RAM (tmpfs) -> kurangi tulis ke eMMC; dibuat otomatis oleh systemd"
+    echo "RuntimeDirectory=jellyfin-tmp"
+    echo "RuntimeDirectoryMode=0700"
+    echo "Environment=\"TMPDIR=/run/jellyfin-tmp\""
+    echo "# Tuning .NET GC: hemat memori"
+    echo "Environment=\"DOTNET_gcServer=0\""
+    echo "Environment=\"DOTNET_GCConserveMemory=7\""
+    echo "Environment=\"DOTNET_TieredPGO=0\""
+    echo "Nice=5"
+    echo "IOSchedulingClass=best-effort"
+    echo "IOSchedulingPriority=6"
+    echo "# Jellyfin dikorbankan lebih dulu saat RAM habis, bukan AdGuard/Shinobi/dll"
+    echo "OOMScoreAdjust=300"
+    echo "Restart=on-failure"
+    echo "RestartSec=10"
+    echo "TimeoutStopSec=30"
+    if (( CGROUP_MEM_OK == 1 )); then
+        echo "MemoryHigh=${JELLYFIN_MEM_HIGH}"
+        echo "MemoryMax=${JELLYFIN_MEM_MAX}"
+    fi
+} > "${OVERRIDE_DIR}/override.conf"
 
-# 8. Bersihkan cache apt agar eMMC tetap lega
-apt-get clean
-
-# 9. Jalankan service
+# 11. Reload & Jalankan Service
 info "Menjalankan service Jellyfin..."
 systemctl daemon-reload
 systemctl enable --now jellyfin
 
-sleep 3
+sleep 5
 
 if systemctl is-active --quiet jellyfin; then
     LOCAL_IP="$(hostname -I | awk '{print $1}')"
-    REMAINING_MB="$(( $(df --output=avail -k / | tail -n 1 | tr -d ' ') / 1024 ))"
-    ok "Jellyfin berhasil dipasang di eMMC dan berjalan!"
+    ok "Jellyfin berhasil dipasang dan berjalan!"
     echo ""
     echo "================================================================"
     echo " Akses Web UI : http://${LOCAL_IP:-<IP-STB>}:8096"
-    echo " Data & Log   : ${JELLYFIN_DATA_DIR}"
-    echo " Sisa eMMC    : ${REMAINING_MB} MB"
+    echo " Data         : ${DATA_DIR}"
+    echo " Cache / Log  : ${CACHE_DIR} , ${LOG_DIR}"
+    echo " Batas RAM    : MemoryHigh=${JELLYFIN_MEM_HIGH}, MemoryMax=${JELLYFIN_MEM_MAX}"
+    echo " Media        : tambahkan library dengan path ${LIBRARY_PATH}"
     echo "----------------------------------------------------------------"
-    echo " Wajib di Web UI agar eMMC tidak cepat penuh:"
-    echo " 1. Matikan Transcoding (wajib Direct Play)"
-    echo " 2. Matikan Trickplay & Chapter Image Extraction"
-    echo " 3. Arahkan library media ke folder film Anda (misal di USB/NAS)"
+    echo " Rekomendasi Setup Awal di Web UI (khusus HG680P / S905X):"
+    echo " 1. Users -> [User] -> Matikan semua opsi Transcoding (Direct Play)"
+    echo " 2. Libraries -> Matikan Trickplay & Chapter Image Extraction"
+    echo "    (penting di eMMC: mencegah folder data membengkak)"
+    echo " 3. Libraries -> Matikan 'Real-time monitoring'; scan terjadwal di jam sepi"
+    echo " 4. Metadata: matikan 'Save artwork into media folders' (media read-only)"
+    echo "----------------------------------------------------------------"
+    echo " Cek stabilitas:"
+    echo "   df -h / ; free -h ; systemctl status jellyfin"
+    echo "   systemctl show jellyfin -p MemoryCurrent -p MemoryHigh -p MemoryMax"
+    echo "   dmesg | grep -i -E 'oom|killed process'"
+    echo "   du -sh /var/lib/jellyfin /var/cache/jellyfin   # pantau ukuran di eMMC"
     echo "================================================================"
 else
     err "Service Jellyfin gagal start. Cek log terakhir:"
