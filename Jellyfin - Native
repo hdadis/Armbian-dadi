@@ -1,27 +1,15 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Jellyfin Native Installer v2 untuk Armbian / Debian / Ubuntu (HG680P RAM 1 GB)
+# Jellyfin Native Installer for Armbian / Debian / Ubuntu (Optimized for HG680P)
 # - Memasang Jellyfin native dari repositori resmi (deb822)
 # - Memindahkan data, cache, log, dan TMPDIR ke storage eksternal
-# - Systemd override: tunggu USB mount, batas RAM (MemoryHigh/Max), OOM-prioritas
-#   rendah supaya layanan lain (AdGuard, Shinobi, n8n, dll) tidak ikut dibunuh
-# - Tuning .NET GC agar hemat memori
-# - Mengaktifkan ZRAM otomatis bila swap belum ada
-# - Menolak data di filesystem jaringan (sshfs/cifs/nfs) karena SQLite bisa rusak
-#
-# Variabel opsional (env atau argumen pertama untuk path):
-#   JELLYFIN_BASE_DIR   path data      (default /mnt/External/jellyfin)
-#   JELLYFIN_MEM_HIGH   mis. 420M      (default 45% dari total RAM)
-#   JELLYFIN_MEM_MAX    mis. 560M      (default 60% dari total RAM)
-#   SETUP_ZRAM=0        jangan pasang ZRAM otomatis (default 1)
-#   FORCE=1             lanjut walau filesystem jaringan / rootfs
+# - Menambahkan systemd override agar menunggu USB mount & ramah RAM/CPU
 # ==============================================================================
 
 set -euo pipefail
 
+# Default path (bisa diubah via argumen pertama atau env JELLYFIN_BASE_DIR)
 JELLYFIN_BASE_DIR="${1:-${JELLYFIN_BASE_DIR:-/mnt/External/jellyfin}}"
-SETUP_ZRAM="${SETUP_ZRAM:-1}"
-FORCE="${FORCE:-0}"
 
 # Warna output
 RED='\033[0;31m'
@@ -34,16 +22,6 @@ info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-
-# Tulis/ubah KEY="val" di file env tanpa menghapus baris lain
-set_env_var() {
-    local file="$1" key="$2" val="$3"
-    if grep -qE "^#?[[:space:]]*${key}=" "${file}"; then
-        sed -i -E "s|^#?[[:space:]]*${key}=.*|${key}=\"${val}\"|" "${file}"
-    else
-        echo "${key}=\"${val}\"" >> "${file}"
-    fi
-}
 
 # 1. Validasi hak akses root
 if [[ "${EUID}" -ne 0 ]]; then
@@ -80,15 +58,8 @@ if [[ -z "${VERSION_CODENAME}" ]]; then
     exit 1
 fi
 
-# RAM total (MB) -> dasar batas memori Jellyfin
-MEM_TOTAL_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
-MEM_TOTAL_MB="$((MEM_TOTAL_KB / 1024))"
-JELLYFIN_MEM_HIGH="${JELLYFIN_MEM_HIGH:-$((MEM_TOTAL_MB * 45 / 100))M}"
-JELLYFIN_MEM_MAX="${JELLYFIN_MEM_MAX:-$((MEM_TOTAL_MB * 60 / 100))M}"
-
 info "Target OS      : ${VERSION_OS} (${VERSION_CODENAME}) [${ARCH}]"
 info "Target Storage : ${JELLYFIN_BASE_DIR}"
-info "RAM total      : ${MEM_TOTAL_MB} MB -> MemoryHigh=${JELLYFIN_MEM_HIGH}, MemoryMax=${JELLYFIN_MEM_MAX}"
 
 # 3. Validasi Mount Point, Filesystem, dan Kapasitas Disk
 CHECK_DIR="${JELLYFIN_BASE_DIR}"
@@ -97,28 +68,16 @@ while [[ ! -d "${CHECK_DIR}" ]]; do
 done
 
 MOUNT_POINT="$(df --output=target "${CHECK_DIR}" | tail -n 1)"
-FS_TYPE="$(df --output=fstype "${CHECK_DIR}" | tail -n 1 | tr -d ' ')"
+FS_TYPE="$(df --output=fstype "${CHECK_DIR}" | tail -n 1)"
 AVAIL_KB="$(df --output=avail -k "${CHECK_DIR}" | tail -n 1 | tr -d ' ')"
 AVAIL_GB="$((AVAIL_KB / 1024 / 1024))"
 
 info "Mount Point    : ${MOUNT_POINT} (Filesystem: ${FS_TYPE}, Sisa: ~${AVAIL_GB} GB)"
 
-# 3a. Tolak filesystem jaringan: SQLite (library.db) sering lock/korup di sini
-if [[ "${FS_TYPE}" =~ ^(fuse\.sshfs|sshfs|cifs|smb3|smbfs|nfs|nfs4|9p|fuse\.rclone)$ ]]; then
-    err "Filesystem '${FS_TYPE}' adalah filesystem jaringan."
-    err "Database SQLite Jellyfin tidak stabil di sshfs/SMB/NFS (database locked / korup)."
-    err "Pakai disk lokal (USB ext4) untuk data Jellyfin. Folder MEDIA boleh di jaringan."
-    if [[ "${FORCE}" != "1" ]]; then
-        err "Batal. Jalankan dengan FORCE=1 hanya jika benar-benar yakin."
-        exit 1
-    fi
-    warn "FORCE=1 aktif, melanjutkan dengan risiko sendiri."
-fi
-
 if [[ "${MOUNT_POINT}" == "/" ]]; then
     warn "Target berada di rootfs/eMMC ('/'), bukan storage eksternal!"
     warn "Di STB eMMC 8 GB (seperti HG680P), Jellyfin 10.11+ rentan gagal start karena limit 2 GB."
-    if [[ -t 0 && "${FORCE}" != "1" ]]; then
+    if [[ -t 0 ]]; then
         read -rp "Tetap lanjutkan instalasi ke '${JELLYFIN_BASE_DIR}'? [y/N]: " confirm
         [[ "${confirm,,}" == "y" ]] || exit 1
     fi
@@ -130,36 +89,10 @@ fi
 
 if [[ "${FS_TYPE}" =~ ^(ntfs|ntfs3|fuseblk|vfat|exfat)$ ]]; then
     warn "Filesystem '${FS_TYPE}' terdeteksi. Linux permission (chown) tidak berjalan normal di NTFS/FAT."
-    warn "Sangat disarankan partisi ext4 untuk folder data (database SQLite lebih stabil, tidak korup)."
+    warn "Pastikan drive di-mount dengan akses tulis untuk user 'jellyfin' (atau gunakan partisi ext4 untuk database SQLite yang lebih stabil)."
 fi
 
-# 4. Swap/ZRAM: wajib untuk RAM 1 GB (dikerjakan sebelum instalasi paket berat)
-SWAP_TOTAL="$(awk '/SwapTotal/ {print $2}' /proc/meminfo)"
-if (( SWAP_TOTAL > 0 )); then
-    ok "Swap/ZRAM sudah aktif ($((SWAP_TOTAL / 1024)) MB)."
-elif [[ "${SETUP_ZRAM}" == "1" ]]; then
-    info "Swap belum aktif, memasang ZRAM (zram-tools)..."
-    apt-get update -qq
-    if apt-get install -y --no-install-recommends zram-tools; then
-        if [[ -f /etc/default/zramswap ]]; then
-            set_env_var /etc/default/zramswap ALGO "zstd"
-            set_env_var /etc/default/zramswap PERCENT "50"
-        fi
-        systemctl enable --now zramswap 2>/dev/null || warn "Gagal mengaktifkan zramswap, cek manual."
-        SWAP_TOTAL="$(awk '/SwapTotal/ {print $2}' /proc/meminfo)"
-        if (( SWAP_TOTAL > 0 )); then
-            ok "ZRAM aktif ($((SWAP_TOTAL / 1024)) MB)."
-        else
-            warn "ZRAM belum terdeteksi aktif. Aktifkan manual sebelum memakai Jellyfin."
-        fi
-    else
-        warn "Gagal memasang zram-tools. Aktifkan swap/ZRAM secara manual."
-    fi
-else
-    warn "Swap/ZRAM tidak aktif dan SETUP_ZRAM=0. Sangat berisiko di RAM 1 GB."
-fi
-
-# 5. Pasang Repositori Resmi Jellyfin (deb822)
+# 4. Pasang Repositori Resmi Jellyfin (deb822)
 info "Memasang dependensi dan repositori resmi Jellyfin..."
 apt-get update -qq
 apt-get install -y --no-install-recommends curl gnupg ca-certificates
@@ -177,12 +110,12 @@ Architectures: ${ARCH}
 Signed-By: /etc/apt/keyrings/jellyfin.gpg
 EOF
 
-# 6. Install Jellyfin Native
+# 5. Install Jellyfin Native
 info "Menginstal paket jellyfin..."
 apt-get update -qq
 apt-get install -y jellyfin
 
-# 7. Hentikan Service & Siapkan Direktori Eksternal
+# 6. Hentikan Service & Siapkan Direktori Eksternal
 info "Mengonfigurasi direktori kerja ke ${JELLYFIN_BASE_DIR}..."
 systemctl stop jellyfin || true
 
@@ -197,7 +130,7 @@ if ! chown -R jellyfin:jellyfin "${JELLYFIN_BASE_DIR}" 2>/dev/null; then
     warn "chown ke jellyfin:jellyfin gagal (normal pada mount NTFS/exFAT). Cek izin akses secara manual."
 fi
 
-# 8. Update /etc/default/jellyfin tanpa menghapus parameter bawaan lainnya
+# 7. Update /etc/default/jellyfin tanpa menghapus parameter bawaan lainnya
 DEFAULT_FILE="/etc/default/jellyfin"
 if [[ -f "${DEFAULT_FILE}" ]]; then
     [[ -f "${DEFAULT_FILE}.bak" ]] || cp "${DEFAULT_FILE}" "${DEFAULT_FILE}.bak"
@@ -205,21 +138,23 @@ else
     touch "${DEFAULT_FILE}"
 fi
 
+set_env_var() {
+    local file="$1"
+    local key="$2"
+    local val="$3"
+    if grep -qE "^#?[[:space:]]*${key}=" "${file}"; then
+        sed -i -E "s|^#?[[:space:]]*${key}=.*|${key}=\"${val}\"|" "${file}"
+    else
+        echo "${key}=\"${val}\"" >> "${file}"
+    fi
+}
+
 set_env_var "${DEFAULT_FILE}" "JELLYFIN_DATA_DIR"  "${JELLYFIN_BASE_DIR}/data"
 set_env_var "${DEFAULT_FILE}" "JELLYFIN_CACHE_DIR" "${JELLYFIN_BASE_DIR}/cache"
 set_env_var "${DEFAULT_FILE}" "JELLYFIN_LOG_DIR"   "${JELLYFIN_BASE_DIR}/log"
 set_env_var "${DEFAULT_FILE}" "TMPDIR"             "${JELLYFIN_BASE_DIR}/tmp"
 
-# 9. Cek dukungan cgroup memory (untuk MemoryHigh/MemoryMax)
-CGROUP_MEM_OK=0
-if grep -qw memory /sys/fs/cgroup/cgroup.controllers 2>/dev/null || [[ -d /sys/fs/cgroup/memory ]]; then
-    CGROUP_MEM_OK=1
-else
-    warn "Controller cgroup 'memory' tidak aktif, MemoryHigh/MemoryMax akan diabaikan."
-    warn "Solusi Armbian: tambahkan 'extraargs=cgroup_enable=memory swapaccount=1' di /boot/armbianEnv.txt lalu reboot."
-fi
-
-# 10. Systemd Drop-in Override
+# 8. Buat Systemd Drop-in Override (tunggu mount eksternal + prioritas ramah STB)
 info "Membuat systemd override..."
 OVERRIDE_DIR="/etc/systemd/system/jellyfin.service.d"
 mkdir -p "${OVERRIDE_DIR}"
@@ -230,35 +165,26 @@ mkdir -p "${OVERRIDE_DIR}"
     if [[ "${MOUNT_POINT}" != "/" ]]; then
         echo "RequiresMountsFor=${MOUNT_POINT}"
     fi
-    echo "StartLimitIntervalSec=600"
-    echo "StartLimitBurst=5"
     echo ""
     echo "[Service]"
     echo "Environment=\"TMPDIR=${JELLYFIN_BASE_DIR}/tmp\""
-    echo "# Tuning .NET GC: hemat memori (workstation GC, lebih agresif melepas RAM)"
-    echo "Environment=\"DOTNET_gcServer=0\""
-    echo "Environment=\"DOTNET_GCConserveMemory=7\""
-    echo "Environment=\"DOTNET_TieredPGO=0\""
     echo "Nice=5"
     echo "IOSchedulingClass=best-effort"
     echo "IOSchedulingPriority=6"
-    echo "# Jellyfin dikorbankan lebih dulu saat RAM habis, bukan AdGuard/Shinobi/dll"
-    echo "OOMScoreAdjust=300"
-    echo "Restart=on-failure"
-    echo "RestartSec=10"
-    echo "TimeoutStopSec=30"
-    if (( CGROUP_MEM_OK == 1 )); then
-        echo "MemoryHigh=${JELLYFIN_MEM_HIGH}"
-        echo "MemoryMax=${JELLYFIN_MEM_MAX}"
-    fi
 } > "${OVERRIDE_DIR}/override.conf"
 
-# 11. Reload & Jalankan Service
+# 9. Cek Swap/ZRAM sebagai pengingat di perangkat RAM 1 GB
+SWAP_TOTAL="$(awk '/SwapTotal/ {print $2}' /proc/meminfo)"
+if (( SWAP_TOTAL == 0 )); then
+    warn "Swap/ZRAM tidak aktif. Sangat disarankan mengaktifkan zram/swap untuk STB RAM 1 GB."
+fi
+
+# 10. Reload & Jalankan Service
 info "Menjalankan service Jellyfin..."
 systemctl daemon-reload
 systemctl enable --now jellyfin
 
-sleep 5
+sleep 3
 
 if systemctl is-active --quiet jellyfin; then
     LOCAL_IP="$(hostname -I | awk '{print $1}')"
@@ -267,20 +193,11 @@ if systemctl is-active --quiet jellyfin; then
     echo "================================================================"
     echo " Akses Web UI : http://${LOCAL_IP:-<IP-STB>}:8096"
     echo " Data & Cache : ${JELLYFIN_BASE_DIR}"
-    echo " Batas RAM    : MemoryHigh=${JELLYFIN_MEM_HIGH}, MemoryMax=${JELLYFIN_MEM_MAX}"
     echo "----------------------------------------------------------------"
     echo " Rekomendasi Setup Awal di Web UI (khusus HG680P / S905X):"
     echo " 1. Users -> [User] -> Matikan semua opsi Transcoding (Direct Play)"
     echo " 2. Libraries -> Matikan Trickplay & Chapter Image Extraction"
-    echo " 3. Libraries -> Matikan 'Real-time monitoring' & scan terjadwal berat"
-    echo " 4. Dashboard -> Scheduled Tasks: jadwalkan scan di jam sepi saja"
-    echo " 5. Pastikan user 'jellyfin' punya izin baca pada folder media"
-    echo "----------------------------------------------------------------"
-    echo " Cek stabilitas:"
-    echo "   free -h ; systemctl status jellyfin"
-    echo "   systemctl show jellyfin -p MemoryCurrent -p MemoryHigh -p MemoryMax"
-    echo "   dmesg | grep -i -E 'oom|killed process'"
-    echo "   journalctl -u jellyfin -n 50 --no-pager"
+    echo " 3. Pastikan user 'jellyfin' punya izin baca pada folder media"
     echo "================================================================"
 else
     err "Service Jellyfin gagal start. Cek log terakhir:"
