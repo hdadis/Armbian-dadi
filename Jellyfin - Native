@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Jellyfin Native Installer for Armbian / Debian / Ubuntu (Optimized for HG680P)
+# Jellyfin Native Installer for Armbian (eMMC Mode - HG680P / ARM64)
 # - Memasang Jellyfin native dari repositori resmi (deb822)
-# - Memindahkan data, cache, log, dan TMPDIR ke storage eksternal
-# - Menambahkan systemd override agar menunggu USB mount & ramah RAM/CPU
+# - Memakai path standar eMMC (/var/lib/jellyfin & /var/cache/jellyfin)
+# - Mengalihkan log & TMPDIR ke eMMC (menghindari limit tmpfs & armbian-ramlog)
 # ==============================================================================
 
 set -euo pipefail
 
-# Default path (bisa diubah via argumen pertama atau env JELLYFIN_BASE_DIR)
-JELLYFIN_BASE_DIR="${1:-${JELLYFIN_BASE_DIR:-/mnt/External/jellyfin}}"
+JELLYFIN_DATA_DIR="/var/lib/jellyfin"
+JELLYFIN_CACHE_DIR="/var/cache/jellyfin"
+JELLYFIN_LOG_DIR="/var/lib/jellyfin/log"
+JELLYFIN_TMP_DIR="/var/lib/jellyfin/tmp"
 
-# Warna output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -23,7 +24,7 @@ ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-# 1. Validasi hak akses root
+# 1. Validasi root
 if [[ "${EUID}" -ne 0 ]]; then
     err "Script ini harus dijalankan sebagai root (gunakan sudo)."
     exit 1
@@ -31,7 +32,7 @@ fi
 
 # 2. Deteksi OS & Arsitektur
 if [[ ! -f /etc/os-release ]]; then
-    err "File /etc/os-release tidak ditemukan. OS tidak dikenali."
+    err "File /etc/os-release tidak ditemukan."
     exit 1
 fi
 
@@ -45,7 +46,7 @@ if [[ "${VERSION_OS}" != "debian" && "${VERSION_OS}" != "ubuntu" ]]; then
     elif [[ "${ID_LIKE:-}" == *"debian"* ]]; then
         VERSION_OS="debian"
     else
-        err "OS '${ID}' tidak didukung. Script ini khusus Debian/Ubuntu/Armbian."
+        err "OS '${ID}' tidak didukung. Khusus Debian/Ubuntu/Armbian."
         exit 1
     fi
 fi
@@ -58,38 +59,16 @@ if [[ -z "${VERSION_CODENAME}" ]]; then
     exit 1
 fi
 
-info "Target OS      : ${VERSION_OS} (${VERSION_CODENAME}) [${ARCH}]"
-info "Target Storage : ${JELLYFIN_BASE_DIR}"
+# 3. Cek sisa ruang eMMC (/)
+AVAIL_KB="$(df --output=avail -k / | tail -n 1 | tr -d ' ')"
+AVAIL_MB="$((AVAIL_KB / 1024))"
 
-# 3. Validasi Mount Point, Filesystem, dan Kapasitas Disk
-CHECK_DIR="${JELLYFIN_BASE_DIR}"
-while [[ ! -d "${CHECK_DIR}" ]]; do
-    CHECK_DIR="$(dirname "${CHECK_DIR}")"
-done
+info "Target OS   : ${VERSION_OS} (${VERSION_CODENAME}) [${ARCH}]"
+info "Target Mode : eMMC (${JELLYFIN_DATA_DIR})"
+info "Sisa eMMC / : ${AVAIL_MB} MB"
 
-MOUNT_POINT="$(df --output=target "${CHECK_DIR}" | tail -n 1)"
-FS_TYPE="$(df --output=fstype "${CHECK_DIR}" | tail -n 1)"
-AVAIL_KB="$(df --output=avail -k "${CHECK_DIR}" | tail -n 1 | tr -d ' ')"
-AVAIL_GB="$((AVAIL_KB / 1024 / 1024))"
-
-info "Mount Point    : ${MOUNT_POINT} (Filesystem: ${FS_TYPE}, Sisa: ~${AVAIL_GB} GB)"
-
-if [[ "${MOUNT_POINT}" == "/" ]]; then
-    warn "Target berada di rootfs/eMMC ('/'), bukan storage eksternal!"
-    warn "Di STB eMMC 8 GB (seperti HG680P), Jellyfin 10.11+ rentan gagal start karena limit 2 GB."
-    if [[ -t 0 ]]; then
-        read -rp "Tetap lanjutkan instalasi ke '${JELLYFIN_BASE_DIR}'? [y/N]: " confirm
-        [[ "${confirm,,}" == "y" ]] || exit 1
-    fi
-fi
-
-if (( AVAIL_KB < 3145728 )); then
-    warn "Ruang kosong kurang dari 3 GB. Jellyfin 10.11+ mewajibkan minimal 2 GB ruang kosong."
-fi
-
-if [[ "${FS_TYPE}" =~ ^(ntfs|ntfs3|fuseblk|vfat|exfat)$ ]]; then
-    warn "Filesystem '${FS_TYPE}' terdeteksi. Linux permission (chown) tidak berjalan normal di NTFS/FAT."
-    warn "Pastikan drive di-mount dengan akses tulis untuk user 'jellyfin' (atau gunakan partisi ext4 untuk database SQLite yang lebih stabil)."
+if (( AVAIL_KB < 2621440 )); then
+    warn "Sisa ruang eMMC kurang dari 2.5 GB. Jellyfin 10.11+ butuh minimal 2 GB ruang kosong untuk start."
 fi
 
 # 4. Pasang Repositori Resmi Jellyfin (deb822)
@@ -115,22 +94,13 @@ info "Menginstal paket jellyfin..."
 apt-get update -qq
 apt-get install -y jellyfin
 
-# 6. Hentikan Service & Siapkan Direktori Eksternal
-info "Mengonfigurasi direktori kerja ke ${JELLYFIN_BASE_DIR}..."
+# 6. Siapkan folder log & tmp di eMMC (bypass ramlog 50MB & tmpfs)
+info "Mengalihkan log dan TMPDIR ke eMMC..."
 systemctl stop jellyfin || true
 
-mkdir -p "${JELLYFIN_BASE_DIR}"/{data,cache,log,tmp}
+mkdir -p "${JELLYFIN_DATA_DIR}" "${JELLYFIN_CACHE_DIR}" "${JELLYFIN_LOG_DIR}" "${JELLYFIN_TMP_DIR}"
+chown -R jellyfin:jellyfin "${JELLYFIN_DATA_DIR}" "${JELLYFIN_CACHE_DIR}"
 
-# Migrasi data awal jika folder eksternal masih kosong
-if [[ -d /var/lib/jellyfin ]] && [[ -z "$(ls -A "${JELLYFIN_BASE_DIR}/data")" ]]; then
-    cp -a /var/lib/jellyfin/. "${JELLYFIN_BASE_DIR}/data/" 2>/dev/null || true
-fi
-
-if ! chown -R jellyfin:jellyfin "${JELLYFIN_BASE_DIR}" 2>/dev/null; then
-    warn "chown ke jellyfin:jellyfin gagal (normal pada mount NTFS/exFAT). Cek izin akses secara manual."
-fi
-
-# 7. Update /etc/default/jellyfin tanpa menghapus parameter bawaan lainnya
 DEFAULT_FILE="/etc/default/jellyfin"
 if [[ -f "${DEFAULT_FILE}" ]]; then
     [[ -f "${DEFAULT_FILE}.bak" ]] || cp "${DEFAULT_FILE}" "${DEFAULT_FILE}.bak"
@@ -149,37 +119,28 @@ set_env_var() {
     fi
 }
 
-set_env_var "${DEFAULT_FILE}" "JELLYFIN_DATA_DIR"  "${JELLYFIN_BASE_DIR}/data"
-set_env_var "${DEFAULT_FILE}" "JELLYFIN_CACHE_DIR" "${JELLYFIN_BASE_DIR}/cache"
-set_env_var "${DEFAULT_FILE}" "JELLYFIN_LOG_DIR"   "${JELLYFIN_BASE_DIR}/log"
-set_env_var "${DEFAULT_FILE}" "TMPDIR"             "${JELLYFIN_BASE_DIR}/tmp"
+set_env_var "${DEFAULT_FILE}" "JELLYFIN_DATA_DIR"  "${JELLYFIN_DATA_DIR}"
+set_env_var "${DEFAULT_FILE}" "JELLYFIN_CACHE_DIR" "${JELLYFIN_CACHE_DIR}"
+set_env_var "${DEFAULT_FILE}" "JELLYFIN_LOG_DIR"   "${JELLYFIN_LOG_DIR}"
+set_env_var "${DEFAULT_FILE}" "TMPDIR"             "${JELLYFIN_TMP_DIR}"
 
-# 8. Buat Systemd Drop-in Override (tunggu mount eksternal + prioritas ramah STB)
+# 7. Systemd override agar ramah RAM/CPU STB dan menerapkan TMPDIR
 info "Membuat systemd override..."
 OVERRIDE_DIR="/etc/systemd/system/jellyfin.service.d"
 mkdir -p "${OVERRIDE_DIR}"
 
-{
-    echo "[Unit]"
-    echo "After=local-fs.target"
-    if [[ "${MOUNT_POINT}" != "/" ]]; then
-        echo "RequiresMountsFor=${MOUNT_POINT}"
-    fi
-    echo ""
-    echo "[Service]"
-    echo "Environment=\"TMPDIR=${JELLYFIN_BASE_DIR}/tmp\""
-    echo "Nice=5"
-    echo "IOSchedulingClass=best-effort"
-    echo "IOSchedulingPriority=6"
-} > "${OVERRIDE_DIR}/override.conf"
+cat <<EOF > "${OVERRIDE_DIR}/override.conf"
+[Service]
+Environment="TMPDIR=${JELLYFIN_TMP_DIR}"
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+EOF
 
-# 9. Cek Swap/ZRAM sebagai pengingat di perangkat RAM 1 GB
-SWAP_TOTAL="$(awk '/SwapTotal/ {print $2}' /proc/meminfo)"
-if (( SWAP_TOTAL == 0 )); then
-    warn "Swap/ZRAM tidak aktif. Sangat disarankan mengaktifkan zram/swap untuk STB RAM 1 GB."
-fi
+# 8. Bersihkan cache apt agar eMMC tetap lega
+apt-get clean
 
-# 10. Reload & Jalankan Service
+# 9. Jalankan service
 info "Menjalankan service Jellyfin..."
 systemctl daemon-reload
 systemctl enable --now jellyfin
@@ -188,16 +149,18 @@ sleep 3
 
 if systemctl is-active --quiet jellyfin; then
     LOCAL_IP="$(hostname -I | awk '{print $1}')"
-    ok "Jellyfin berhasil dipasang dan berjalan!"
+    REMAINING_MB="$(( $(df --output=avail -k / | tail -n 1 | tr -d ' ') / 1024 ))"
+    ok "Jellyfin berhasil dipasang di eMMC dan berjalan!"
     echo ""
     echo "================================================================"
     echo " Akses Web UI : http://${LOCAL_IP:-<IP-STB>}:8096"
-    echo " Data & Cache : ${JELLYFIN_BASE_DIR}"
+    echo " Data & Log   : ${JELLYFIN_DATA_DIR}"
+    echo " Sisa eMMC    : ${REMAINING_MB} MB"
     echo "----------------------------------------------------------------"
-    echo " Rekomendasi Setup Awal di Web UI (khusus HG680P / S905X):"
-    echo " 1. Users -> [User] -> Matikan semua opsi Transcoding (Direct Play)"
-    echo " 2. Libraries -> Matikan Trickplay & Chapter Image Extraction"
-    echo " 3. Pastikan user 'jellyfin' punya izin baca pada folder media"
+    echo " Wajib di Web UI agar eMMC tidak cepat penuh:"
+    echo " 1. Matikan Transcoding (wajib Direct Play)"
+    echo " 2. Matikan Trickplay & Chapter Image Extraction"
+    echo " 3. Arahkan library media ke folder film Anda (misal di USB/NAS)"
     echo "================================================================"
 else
     err "Service Jellyfin gagal start. Cek log terakhir:"
