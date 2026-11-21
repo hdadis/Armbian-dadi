@@ -32,7 +32,7 @@
 #   MEDIA_SERVER       default 192.168.18.2
 #   MEDIA_REMOTE       default /mnt/External/Media
 #   MEDIA_MOUNT        default /mnt/media
-#   MEDIA_SMB_SHARE    nama share SMB (default: deteksi otomatis)
+#   MEDIA_SMB_SHARE    nama share SMB (default External; fallback deteksi otomatis)
 #   MEDIA_SMB_USER / MEDIA_SMB_PASS   akun Samba (default sudah terisi)
 #   MEDIA_SSH_USER     user SSH untuk mode sshfs (default root)
 #   MEDIA_SSH_KEY      private key untuk mode sshfs (default /root/.ssh/id_ed25519)
@@ -48,7 +48,7 @@ MEDIA_MODE="${MEDIA_MODE:-auto}"          # auto = SMB dulu, lalu NFS
 MEDIA_SERVER="${MEDIA_SERVER:-192.168.18.2}"
 MEDIA_REMOTE="${MEDIA_REMOTE:-/mnt/External/Media}"   # dipakai mode nfs/sshfs
 MEDIA_MOUNT="${MEDIA_MOUNT:-/mnt/media}"
-MEDIA_SMB_SHARE="${MEDIA_SMB_SHARE:-}"    # kosong = deteksi otomatis share yang berisi folder Movie
+MEDIA_SMB_SHARE="${MEDIA_SMB_SHARE:-External}"   # share utama; bila gagal, script mencari share lain yang berisi Movie
 MEDIA_SMB_USER="${MEDIA_SMB_USER:-dadi}"
 DEFAULT_SMB_PASS='980123Abc!$'
 MEDIA_SMB_PASS="${MEDIA_SMB_PASS:-${DEFAULT_SMB_PASS}}"
@@ -278,16 +278,15 @@ find_smb_share() {
 
     if [[ -n "${MEDIA_SMB_SHARE}" ]]; then
         candidates+=("${MEDIA_SMB_SHARE}")
-    else
-        if command -v smbclient >/dev/null 2>&1; then
-            while IFS='|' read -r type name rest; do
-                if [[ "${type}" == "Disk" && "${name}" != *'$' ]]; then
-                    candidates+=("${name}")
-                fi
-            done < <(smbclient -L "//${MEDIA_SERVER}" -A "${SMB_CRED_FILE}" -g 2>/dev/null || true)
-        fi
-        candidates+=(Media media External Movie)
     fi
+    if command -v smbclient >/dev/null 2>&1; then
+        while IFS='|' read -r type name rest; do
+            if [[ "${type}" == "Disk" && "${name}" != *'$' ]]; then
+                candidates+=("${name}")
+            fi
+        done < <(smbclient -L "//${MEDIA_SERVER}" -A "${SMB_CRED_FILE}" -g 2>/dev/null || true)
+    fi
+    candidates+=(Media media External Movie)
 
     tmp="$(mktemp -d)"
     for share in "${candidates[@]}"; do
@@ -385,6 +384,8 @@ setup_media() {
     } >> /etc/fstab
 
     systemctl daemon-reload
+    # Aktifkan unit automount sekarang (tanpa ini baru aktif setelah reboot)
+    systemctl start "$(systemd-escape -p --suffix=automount "${MEDIA_MOUNT}")" 2>/dev/null || true
     if timeout 25 ls "${LIBRARY_PATH}" >/dev/null 2>&1; then
         ok "Film terbaca di ${LIBRARY_PATH} (mode: ${mode})."
         ls "${LIBRARY_PATH}" | head -n 10 | sed 's/^/        /'
