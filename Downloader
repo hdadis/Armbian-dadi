@@ -3,11 +3,14 @@
 #  instalasi.sh - Downloader untuk Armbian HG680P
 #  aria2 + AriaNg (web UI) + yt-dlp (yt / ytmp3 / ytm4a)
 #
-#  SEMUA unduhan masuk ke folder IDM di 192.168.18.2:
+#  SEMUA unduhan masuk ke folder IDM:
 #      /mnt/External/Downloads/IDM
-#  - Kalau folder itu SUDAH ter-mount di HG680P (sshfs/cifs/nfs,
-#    termasuk kalau yang di-mount folder induknya), dipakai apa adanya.
-#  - Kalau belum, dipasang otomatis lewat sshfs.
+#  - Kalau folder itu sudah berada di disk/mount TERPISAH dari disk sistem
+#    (flashdisk/HDD USB, atau folder jaringan sshfs/cifs/nfs, termasuk kalau
+#    yang di-mount folder induknya), dipakai apa adanya.
+#  - Kalau belum, dipasang otomatis lewat sshfs ke REMOTE_HOST.
+#  - Unduhan DITOLAK kalau folder itu ternyata di disk sistem (misal disk
+#    USB tercabut), supaya disk sistem tidak penuh.
 #  Aman dijalankan berulang kali (tidak menghapus file apa pun).
 # ============================================================
 set -e
@@ -28,8 +31,11 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 
 # jenis filesystem tempat sebuah path berada (bukan sekadar mountpoint)
-fs_type()      { findmnt -n -o FSTYPE -T "$1" 2>/dev/null | head -n1; }
-is_remote_fs() { case "$1" in fuse.*|cifs|smb3|nfs|nfs4) return 0 ;; esac; return 1; }
+fs_type()   { findmnt -n -o FSTYPE -T "$1" 2>/dev/null | head -n1; }
+fs_target() { findmnt -n -o TARGET -T "$1" 2>/dev/null | head -n1; }
+fs_source() { findmnt -n -o SOURCE -T "$1" 2>/dev/null | head -n1; }
+# true jika path ada di disk/mount TERPISAH (USB atau jaringan), bukan di disk sistem "/"
+on_separate_mount() { local t; t="$(fs_target "$1")"; [ -n "$t" ] && [ "$t" != "/" ]; }
 
 # ------------------------------------------------------------
 echo "==> [1/6] Install paket"
@@ -37,12 +43,18 @@ apt-get update -y
 apt-get install -y aria2 curl unzip python3 ca-certificates ffmpeg
 
 # ------------------------------------------------------------
-echo "==> [2/6] Folder IDM di ${REMOTE_HOST}"
+echo "==> [2/6] Folder IDM (${MOUNT_DIR})"
 FS="$(fs_type "$MOUNT_DIR")"
-if [ -d "$MOUNT_DIR" ] && is_remote_fs "$FS"; then
-  echo "    Sudah ter-mount (tipe: ${FS}), dipakai apa adanya."
+if [ -d "$MOUNT_DIR" ] && on_separate_mount "$MOUNT_DIR"; then
+  echo "    Sudah ter-mount: $(fs_target "$MOUNT_DIR") <- $(fs_source "$MOUNT_DIR") (tipe: ${FS}), dipakai apa adanya."
 else
-  echo "    Belum ter-mount (terbaca: ${FS:-folder belum ada}). Memasang lewat sshfs..."
+  echo "    Belum ada disk/mount terpisah di sini (terbaca: ${FS:-folder belum ada})."
+  if grep -E '^[^#]*[[:space:]]/mnt/External(/[^[:space:]]*)?[[:space:]]' /etc/fstab 2>/dev/null | grep -qv 'fuse.sshfs'; then
+    echo "GAGAL: /mnt/External terdaftar di /etc/fstab tapi belum ter-mount (flashdisk/HDD belum terpasang?)."
+    echo "       Pasang disknya, jalankan: mount -a   lalu ulangi script ini."
+    exit 1
+  fi
+  echo "    Memasang folder IDM lewat sshfs dari ${REMOTE_HOST}..."
   apt-get install -y sshfs fuse3 openssh-client
 
   KEY=""
@@ -72,8 +84,8 @@ else
 
   # jangan menutupi file yang ada di disk lokal HG680P
   if [ -d "$MOUNT_DIR" ] && [ -n "$(ls -A "$MOUNT_DIR" 2>/dev/null)" ]; then
-    echo "GAGAL: ${MOUNT_DIR} di HG680P berisi file dan terbaca sebagai disk LOKAL (tipe: ${FS:-?})."
-    echo "       Kalau menurut Anda folder ini sudah ter-mount ke ${REMOTE_HOST}, kirim hasil ini:"
+    echo "GAGAL: ${MOUNT_DIR} berisi file dan berada di DISK SISTEM (tipe: ${FS:-?})."
+    echo "       Kalau menurut Anda folder ini sudah ter-mount, kirim hasil ini:"
     echo "       findmnt -T ${MOUNT_DIR}"
     exit 1
   fi
@@ -85,7 +97,7 @@ else
   systemctl daemon-reload
   mount "$MOUNT_DIR"
   FS="$(fs_type "$MOUNT_DIR")"
-  if ! is_remote_fs "$FS"; then
+  if ! on_separate_mount "$MOUNT_DIR"; then
     echo "GAGAL: mount ke ${REMOTE_HOST}:${REMOTE_DIR} tidak berhasil (terbaca: ${FS:-?})."; exit 1
   fi
 fi
@@ -145,14 +157,14 @@ touch /root/.aria2/aria2.session
 
 # ------------------------------------------------------------
 echo "==> [4/6] Service aria2 (jalan otomatis, menunggu folder IDM siap)"
-# aria2 baru mulai setelah folder IDM terbaca sebagai folder jaringan,
-# supaya unduhan tidak pernah jatuh ke disk lokal HG680P.
+# aria2 baru mulai setelah folder IDM berada di disk/mount terpisah (USB atau jaringan),
+# supaya unduhan tidak pernah jatuh ke disk sistem HG680P.
 cat > /usr/local/bin/idm-wait <<'EOF'
 #!/bin/bash
 DEST="__DEST__"
 for i in $(seq 1 60); do
-  FS="$(findmnt -n -o FSTYPE -T "$DEST" 2>/dev/null | head -n1)"
-  case "$FS" in fuse.*|cifs|smb3|nfs|nfs4) exit 0 ;; esac
+  T="$(findmnt -n -o TARGET -T "$DEST" 2>/dev/null | head -n1)"
+  if [ -n "$T" ] && [ "$T" != "/" ]; then exit 0; fi
   sleep 5
 done
 exit 1
@@ -220,7 +232,7 @@ if [ -x /usr/local/bin/yt-dlp ] || curl -fsSL "https://github.com/yt-dlp/yt-dlp/
 cat > /usr/local/bin/yt-run <<'EOF'
 #!/bin/bash
 # Pembantu untuk yt / ytmp3 / ytm4a.
-# SEMUA unduhan WAJIB masuk ke folder IDM di 192.168.18.2 (tidak pernah ke disk HG680P).
+# SEMUA unduhan WAJIB masuk ke folder IDM (tidak pernah ke disk sistem HG680P).
 DEST="__DEST__"
 MODE="$1"; shift
 
@@ -229,16 +241,17 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-is_remote_fs() { case "$1" in fuse.*|cifs|smb3|nfs|nfs4) return 0 ;; esac; return 1; }
-FS="$(findmnt -n -o FSTYPE -T "$DEST" 2>/dev/null | head -n1)"
-if ! is_remote_fs "$FS"; then
-  mount "$DEST" >/dev/null 2>&1          # coba mount via fstab bila ada
-  FS="$(findmnt -n -o FSTYPE -T "$DEST" 2>/dev/null | head -n1)"
+on_separate_mount() {
+  local t; t="$(findmnt -n -o TARGET -T "$1" 2>/dev/null | head -n1)"
+  [ -n "$t" ] && [ "$t" != "/" ]
+}
+if ! on_separate_mount "$DEST"; then
+  mount -a >/dev/null 2>&1               # coba pasang disk/mount dari fstab bila ada
 fi
-if [ ! -d "$DEST" ] || ! is_remote_fs "$FS"; then
-  echo "GAGAL: $DEST belum ter-mount ke folder IDM di 192.168.18.2 (terbaca: ${FS:-tidak ada})."
-  echo "Unduhan dibatalkan supaya tidak tersimpan di disk HG680P."
-  echo "Cek: findmnt -T $DEST   |   Perbaiki: mount $DEST  atau  bash instalasi.sh"
+if [ ! -d "$DEST" ] || ! on_separate_mount "$DEST"; then
+  echo "GAGAL: $DEST berada di DISK SISTEM HG680P (disk/folder IDM belum terpasang)."
+  echo "Unduhan dibatalkan supaya disk sistem tidak penuh."
+  echo "Cek: findmnt -T $DEST   |   Perbaiki: mount -a  atau  bash instalasi.sh"
   exit 1
 fi
 TESTF="$DEST/.tulis_tes_$$"
@@ -261,7 +274,7 @@ setsid nohup /usr/local/bin/yt-dlp --newline "${OPTS[@]}" \
   -o "%(title)s [%(id)s].%(ext)s" "$@" > "$LOG" 2>&1 < /dev/null &
 ln -sf "$LOG" /var/tmp/yt-logs/latest.log
 echo "Unduhan berjalan di latar belakang. Terminal boleh ditutup."
-echo "Tujuan  : $DEST (folder IDM di 192.168.18.2)"
+echo "Tujuan  : $DEST   [disk: $(findmnt -n -o SOURCE -T "$DEST" 2>/dev/null | head -n1)]"
 echo "Progress: ytlog"
 EOF
   sed -i "s|__DEST__|${MOUNT_DIR}|" /usr/local/bin/yt-run
@@ -310,7 +323,7 @@ echo
 echo "=============================================="
 echo " SELESAI"
 echo "=============================================="
-echo " Folder download : ${REMOTE_HOST}:${REMOTE_DIR}  (di HG680P: ${MOUNT_DIR})"
+echo " Folder download : ${MOUNT_DIR}   [disk: $(fs_source "$MOUNT_DIR")]"
 echo " RPC secret      : ${SECRET}"
 if [ "$WEB_OK" -eq 1 ]; then
   echo " Web UI          : http://${IP}:${WEB_PORT}/#!/settings/rpc/set/ws/${IP}/${RPC_PORT}/jsonrpc/${SECRET_B64}"
