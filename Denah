@@ -4,10 +4,10 @@ set -euo pipefail
 
 # ==================== PENGATURAN (ubah jika perlu) ====================
 REMOTE_IP="192.168.18.2"
-REMOTE_USER="root"          # ubah ke "roo" jika username memang "roo"
+REMOTE_USER="root"
 REMOTE_PASS="980Abc"
 REMOTE_DIR="/mnt/External/Downloads/IDM"
-DEFAULT_SUMBER="auto"       # "auto" (Gemini -> fallback OSM) atau "osm" (langsung OSM)
+DEFAULT_SUMBER="osm"        # "osm" (langsung OSM tanpa API) | "auto" (Gemini -> fallback OSM)
 # ======================================================================
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -16,7 +16,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
 fi
 
 echo "============================================================"
-echo "  INSTALASI ALL-IN-ONE: api_keys.py + denah.py + SSH + APT"
+echo "  INSTALASI FINAL: denah (OSM 4K -> Langsung IDM) + api_keys"
 echo "============================================================"
 
 # ----------------------------------------------------------------------
@@ -61,13 +61,12 @@ else
     echo "  -> SSH key berhasil dipasang ke ${REMOTE_USER}@${REMOTE_IP}."
   else
     echo "  -> [PERINGATAN] Gagal otomatis pasang SSH key ke ${REMOTE_USER}@${REMOTE_IP}."
-    echo "     Cek IP/user/password (REMOTE_USER=${REMOTE_USER}) lalu jalankan manual:"
-    echo "     ssh-copy-id ${REMOTE_USER}@${REMOTE_IP}"
+    echo "     Cek IP/user/password lalu jalankan manual: ssh-copy-id ${REMOTE_USER}@${REMOTE_IP}"
   fi
 fi
 
 # ----------------------------------------------------------------------
-# 3. PASANG GUDANG API KEY (/root/api_keys.py) & SYMLINK GLOBAL
+# 3. PASANG GUDANG API KEY (/root/api_keys.py) & SYMLINK GLOBAL (OPSIONAL)
 # ----------------------------------------------------------------------
 echo ""
 echo "[3/5] Menyiapkan gudang API key (/root/api_keys.py)..."
@@ -185,14 +184,15 @@ echo "  -> Symlink global aktif: $SITE_DIR/api_keys.py"
 # 4. PASANG SCRIPT UTAMA (/root/denah.py)
 # ----------------------------------------------------------------------
 echo ""
-echo "[4/5] Memasang /root/denah.py..."
+echo "[4/5] Memasang /root/denah.py (default OSM, langsung simpan ke IDM)..."
 cat << 'DENAH_EOF' > /root/denah.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 denah.py — Diagram Radar Lokasi Strategis 4K (Armbian)
-Sinkron dengan /root/api_keys.py + OpenStreetMap (Overpass bbox & Nominatim).
-Hemat eMMC: langsung tulis ke disk eksternal jika termount, atau pakai /tmp + auto-hapus setelah SCP.
+- Default: OpenStreetMap (Overpass cepat + fallback node ringan + Nominatim), tanpa butuh API key.
+- Opsional: --sumber auto / --sumber gemini (sinkron dengan /root/api_keys.py).
+- Output langsung masuk ke /mnt/External/Downloads/IDM tanpa subfolder dan tanpa memenuhi eMMC.
 """
 
 import argparse
@@ -230,7 +230,7 @@ OVERPASS_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
-OSM_USER_AGENT = "DenahRadarLokasi/2.4 (Armbian-SelfHosted; contact: local-user)"
+OSM_USER_AGENT = "DenahRadarLokasi/3.0 (Armbian-SelfHosted; contact: local-user)"
 
 REMOTE_HOST = "__REMOTE_USER__@__REMOTE_IP__"
 REMOTE_DIR = "__REMOTE_DIR__"
@@ -738,34 +738,49 @@ def _kirim_overpass(q: str, label: str) -> list:
 def query_overpass(lat: float, lon: float, radius_km: float, tambahan: bool = False) -> list:
     s, w, n, e = hitung_bbox(lat, lon, radius_km)
     if not tambahan:
-        q = f"""[out:json][timeout:25][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
+        q = f"""[out:json][timeout:20][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
 (
-  nwr["aeroway"="aerodrome"]["name"];
-  nwr["railway"="station"]["name"];
-  nwr["amenity"="bus_station"]["name"];
-  nwr["amenity"="hospital"]["name"];
-  nwr["amenity"="university"]["name"];
-  nwr["amenity"="college"]["name"];
-  nwr["shop"="mall"]["name"];
-  nwr["shop"="department_store"]["name"];
-  nwr["amenity"="police"]["name"];
-  nwr["amenity"="marketplace"]["name"];
-  nwr["amenity"="cinema"]["name"];
-  nwr["leisure"="water_park"]["name"];
-  nwr["leisure"="park"]["name"];
-  nwr["tourism"="attraction"]["name"];
-  nwr["tourism"="theme_park"]["name"];
-  nwr["tourism"="zoo"]["name"];
+  nw["aeroway"="aerodrome"]["name"];
+  nw["railway"="station"]["name"];
+  nw["amenity"="bus_station"]["name"];
+  nw["amenity"="hospital"]["name"];
+  nw["amenity"="university"]["name"];
+  nw["shop"="mall"]["name"];
+  nw["shop"="department_store"]["name"];
+  nw["amenity"="police"]["name"];
+  nw["amenity"="marketplace"]["name"];
+  nw["amenity"="cinema"]["name"];
+  nw["leisure"="water_park"]["name"];
+  nw["tourism"="attraction"]["name"];
+  nw["tourism"="theme_park"]["name"];
+  nw["tourism"="zoo"]["name"];
 );
-out center qt;"""
-        return _kirim_overpass(q, "Utama")
+out center qt 250;"""
+        try:
+            return _kirim_overpass(q, "Utama")
+        except Exception:
+            q_ringan = f"""[out:json][timeout:20][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
+(
+  node["railway"="station"]["name"];
+  node["amenity"="bus_station"]["name"];
+  node["amenity"="hospital"]["name"];
+  node["amenity"="university"]["name"];
+  node["shop"="mall"]["name"];
+  node["amenity"="police"]["name"];
+  node["amenity"="marketplace"]["name"];
+  node["tourism"="attraction"]["name"];
+);
+out qt 150;"""
+            return _kirim_overpass(q_ringan, "Ringan")
 
-    q = f"""[out:json][timeout:25][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
+    q = f"""[out:json][timeout:20][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
 (
-  nwr["amenity"="school"]["name"];
-  nwr["amenity"="restaurant"]["name"];
+  nw["leisure"="park"]["name"];
+  nw["amenity"="college"]["name"];
+  nw["amenity"="school"]["name"];
+  nw["amenity"="restaurant"]["name"];
 );
-out center qt;"""
+out center qt 150;"""
     return _kirim_overpass(q, "Tambahan")
 
 
@@ -1119,8 +1134,8 @@ def tulis_txt(path: str, lat: float, lon: float, radius: float, kawasan: str, fa
         fh.write("\n".join(lines) + "\n")
 
 
-def kirim(files: list, sub: str) -> str:
-    remote = f"{REMOTE_DIR}/{sub}"
+def kirim(files: list) -> str:
+    remote = REMOTE_DIR
     ssh_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"]
     subprocess.run(["ssh", *ssh_opts, REMOTE_HOST, f"mkdir -p {shlex.quote(remote)}"], check=True)
     subprocess.run(["scp", *ssh_opts, *files, f"{REMOTE_HOST}:{remote}/"], check=True)
@@ -1138,8 +1153,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Generator Diagram Radar Lokasi Strategis 4K")
     p.add_argument("koordinat", nargs="?", help="Koordinat DMS atau desimal")
     p.add_argument("radius", nargs="?", type=str, help="Radius maksimal dalam km")
-    p.add_argument("--sumber", choices=("auto", "osm", "gemini"), default=SUMBER_DEFAULT,
-                   help=f"Sumber data: auto, osm, atau gemini (default: {SUMBER_DEFAULT})")
+    p.add_argument("--sumber", choices=("osm", "auto", "gemini"), default=SUMBER_DEFAULT,
+                   help=f"Sumber data: osm, auto, atau gemini (default: {SUMBER_DEFAULT})")
     p.add_argument("--model", default=DEFAULT_MODEL, help=f"Model Gemini (default: {DEFAULT_MODEL})")
     p.add_argument("--no-upload", action="store_true", help="Simpan lokal saja tanpa SCP")
     return p.parse_args()
@@ -1191,8 +1206,7 @@ def main():
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     langsung_external = is_external_mounted(REMOTE_DIR)
-    base_dir = REMOTE_DIR if langsung_external else TMP_DIR
-    folder = os.path.join(base_dir, f"denah_{ts}")
+    folder = REMOTE_DIR if langsung_external else os.path.join(TMP_DIR, f"denah_{ts}")
     os.makedirs(folder, exist_ok=True)
     png_path, txt_path = os.path.join(folder, PNG_NAME), os.path.join(folder, TXT_NAME)
 
@@ -1205,16 +1219,16 @@ def main():
     tulis_txt(txt_path, lat, lon, radius, kawasan, fasilitas, sumber_label)
 
     if langsung_external:
-        print(f"Selesai (disk eksternal): {folder}")
+        print(f"Selesai (langsung di disk eksternal): {REMOTE_DIR}")
         return
     if args.no_upload:
         print(f"Selesai (sementara di /tmp): {folder}")
         return
 
     try:
-        remote = kirim([png_path, txt_path], f"denah_{ts}")
+        remote = kirim([png_path, txt_path])
         shutil.rmtree(folder, ignore_errors=True)
-        print(f"Selesai: terkirim ke {REMOTE_HOST}:{remote} (cache /tmp dibersihkan)")
+        print(f"Selesai: {PNG_NAME} & {TXT_NAME} langsung masuk ke {REMOTE_HOST}:{remote} (cache /tmp dibersihkan)")
     except Exception as e:
         print(f"File jadi tapi gagal dikirim ({e}). Salinan sementara: {folder}")
 
@@ -1233,7 +1247,7 @@ chmod +x /root/denah.py
 echo "  -> /root/denah.py terpasang."
 
 # ----------------------------------------------------------------------
-# 5. SHORTCUT PERINTAH 'denah' & BERSIHKAN SISA LAMA
+# 5. SHORTCUT PERINTAH 'denah' & BERSIHKAN SISA FILE LAMA
 # ----------------------------------------------------------------------
 echo ""
 echo "[5/5] Memasang perintah cepat 'denah' & membersihkan sisa lama..."
@@ -1247,18 +1261,17 @@ if [ -f /root/.bashrc ] && grep -qE '^\s*alias\s+denah=' /root/.bashrc; then
   sed -i '/^\s*alias\s\+denah=/d' /root/.bashrc
 fi
 
-rm -rf /root/denah_hasil
+rm -rf /root/denah_hasil /root/denah_gemini.py /root/denah_gemini.py.bak
 
 echo ""
 echo "============================================================"
 echo "  INSTALASI SELESAI!"
 echo "============================================================"
-python3 /root/api_keys.py
+echo "Mode default : ${DEFAULT_SUMBER} (tanpa butuh API key)"
+echo "Tujuan hasil : ${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR} (langsung tanpa subfolder)"
+echo "Sisa eMMC    : $(df -h / | tail -n 1)"
 echo ""
-echo "Sisa ruang eMMC:"
-df -h / | tail -n 1
-echo ""
-echo "Jalankan 1 baris ini lalu langsung pakai 'denah':"
+echo "Jalankan sekali di terminal ini lalu langsung pakai:"
 echo "  unalias denah 2>/dev/null || true && denah"
 INSTALL_EOF
 chmod +x /root/install.sh
