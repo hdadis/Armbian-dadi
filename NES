@@ -1,4 +1,3 @@
-cat << 'EOF' > install.sh
 #!/bin/bash
 set -e
 
@@ -232,4 +231,4 @@ echo " Renderer Fix & Multi-BIOS siap digunakan."
 echo " Akses via: http://$LOCAL_IP:$PORT"
 echo " (Refresh paksa browser dengan Ctrl + F5)"
 echo "=========================================================="
-EOF
+
