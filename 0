@@ -1,93 +1,181 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+# perbaiki-semua.sh - perbaikan TANPA install ulang:
+#  1) pindahkan mount lama /mnt/idm -> /mnt/External/Downloads/IDM (folder IDM di 192.168.18.2)
+#  2) arahkan aria2 ke folder yang sama
+#  3) pasang ulang yt / ytmp3 / ytm4a / ytlog (wajib ke folder IDM, menolak jalan jika belum ter-mount)
+# Tidak menghapus file apa pun dan tidak memasang paket besar. Aman dijalankan berulang.
 
-SERVER_IP="192.168.18.2"
-LOCAL_MOUNT="/mnt/IDM_Storage"
-CRED_FILE="/etc/samba/credentials_share"
+if [ "$(id -u)" -ne 0 ]; then echo "Jalankan sebagai root."; exit 1; fi
 
-if [[ $EUID -ne 0 ]]; then
-   echo "[ERROR] Skrip ini harus dijalankan sebagai root (gunakan sudo)." >&2
-   exit 1
+REMOTE_USER="root"
+REMOTE_HOST="192.168.18.2"
+REMOTE_DIR="/mnt/External/Downloads/IDM"
+MOUNT_DIR="/mnt/External/Downloads/IDM"
+OLD_MOUNT="/mnt/idm"
+
+echo "==> [1/6] Pengecekan awal"
+if [ ! -x /usr/local/bin/yt-dlp ]; then
+  echo "yt-dlp belum terpasang. Jalankan bash instalasi.sh dulu."; exit 1
+fi
+if pgrep -f '^([^ ]*python[0-9.]* )?[^ ]*/yt-dlp( |$)' >/dev/null 2>&1; then
+  echo "Masih ada unduhan yt-dlp yang berjalan. Tunggu selesai (cek: ytlog), lalu jalankan ulang."; exit 1
+fi
+command -v sshfs >/dev/null 2>&1 || apt-get install -y sshfs
+
+# pakai key yang sama dengan mount lama bila ada, kalau tidak cari otomatis
+KEY="$(grep "[[:space:]]${OLD_MOUNT}[[:space:]]" /etc/fstab 2>/dev/null | grep -o 'IdentityFile=[^, ]*' | head -n1 | cut -d= -f2)"
+if [ -z "$KEY" ] || [ ! -f "$KEY" ]; then
+  KEY=""
+  for k in id_ed25519 id_rsa id_ecdsa; do
+    if [ -f "/root/.ssh/$k" ]; then KEY="/root/.ssh/$k"; break; fi
+  done
+fi
+if [ -z "$KEY" ]; then
+  echo "SSH key tidak ditemukan di /root/.ssh. Jalankan bash instalasi.sh (membuat key otomatis)."; exit 1
+fi
+echo "    Pakai key: $KEY"
+
+OLD_SRC="$(findmnt -n -o SOURCE "$OLD_MOUNT" 2>/dev/null | head -n1)"
+[ -n "$OLD_SRC" ] && echo "    Mount lama $OLD_MOUNT mengarah ke: $OLD_SRC"
+
+echo "==> [2/6] Tes SSH ke ${REMOTE_HOST}"
+if ! ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+     "${REMOTE_USER}@${REMOTE_HOST}" "test -d '${REMOTE_DIR}'" >/dev/null 2>&1; then
+  echo "Gagal SSH ke ${REMOTE_HOST}, atau folder ${REMOTE_DIR} tidak ada di sana."
+  echo "Tidak ada yang diubah."; exit 1
 fi
 
-echo "[1/5] Menginstal cifs-utils dan smbclient..."
-apt-get update -y
-apt-get install -y cifs-utils smbclient
-
-echo ""
-echo "=== Kredensial Samba Server (${SERVER_IP}) ==="
-read -rp "Username Samba (kosongkan jika Guest/tanpa password): " SAMBA_USER
-SAMBA_PASS=""
-if [[ -n "${SAMBA_USER}" ]]; then
-    read -rsp "Password Samba untuk '${SAMBA_USER}': " SAMBA_PASS
-    echo ""
+echo "==> [3/6] Pindahkan mount ke ${MOUNT_DIR}"
+FSTAB_BAK="/etc/fstab.bak-$(date +%Y%m%d-%H%M%S)"
+cp -f /etc/fstab "$FSTAB_BAK"
+rollback() {
+  echo "GAGAL: $1"
+  echo "Mengembalikan pengaturan mount lama..."
+  cp -f "$FSTAB_BAK" /etc/fstab
+  systemctl daemon-reload
+  mount -a 2>/dev/null || true
+  systemctl start aria2 2>/dev/null || true
+  exit 1
+}
+systemctl stop aria2 2>/dev/null || true
+for m in "$OLD_MOUNT" "$MOUNT_DIR"; do
+  if mountpoint -q "$m" 2>/dev/null; then
+    umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || true
+  fi
+done
+sed -i "\|[[:space:]]${OLD_MOUNT}[[:space:]]|d" /etc/fstab
+sed -i "\|[[:space:]]${MOUNT_DIR}[[:space:]]|d" /etc/fstab
+if [ -d "$MOUNT_DIR" ] && ! mountpoint -q "$MOUNT_DIR" 2>/dev/null && [ -n "$(ls -A "$MOUNT_DIR" 2>/dev/null)" ]; then
+  rollback "folder lokal ${MOUNT_DIR} di HG680P sudah ada isinya. Pindahkan/kosongkan dulu supaya tidak tertutup mount."
 fi
-
-mkdir -p /etc/samba
-if [[ -n "${SAMBA_USER}" ]]; then
-    cat <<EOF > "${CRED_FILE}"
-username=${SAMBA_USER}
-password=${SAMBA_PASS}
-EOF
-    chmod 600 "${CRED_FILE}"
-    MOUNT_AUTH="credentials=${CRED_FILE}"
-    SMB_AUTH="-U ${SAMBA_USER}%${SAMBA_PASS}"
-else
-    MOUNT_AUTH="guest"
-    SMB_AUTH="-N"
-fi
-
-echo ""
-echo "[2/5] Memeriksa daftar share aktif di ${SERVER_IP}..."
-# Menampilkan share yang tersedia untuk memudahkan pemilihan
-smbclient -L "//${SERVER_IP}" ${SMB_AUTH} -g 2>/dev/null | grep -i "Disk|" | cut -d'|' -f2 || true
-
-echo ""
-read -rp "Masukkan nama share di server (contoh: External, Downloads, atau IDM): " SHARE_NAME
-SHARE_NAME="$(echo "${SHARE_NAME}" | sed 's|^/||;s|/$||')"
-
-# Cek apakah share mencakup subfolder
-read -rp "Apakah butuh subfolder di dalam share tersebut? (Ketik subfoldernya, contoh 'Downloads/IDM', atau tekan Enter jika langsung share folder IDM): " SUB_PATH
-SUB_PATH="$(echo "${SUB_PATH}" | sed 's|^/||;s|/$||')"
-
-if [[ -n "${SUB_PATH}" ]]; then
-    FULL_REMOTE="//${SERVER_IP}/${SHARE_NAME}/${SUB_PATH}"
-else
-    FULL_REMOTE="//${SERVER_IP}/${SHARE_NAME}"
-fi
-
-echo "[3/5] Menyiapkan direktori local mount di ${LOCAL_MOUNT}..."
-mkdir -p "${LOCAL_MOUNT}"
-
-echo "[4/5] Mengonfigurasi /etc/fstab..."
-# Parameter:
-# _netdev,nofail: memastikan OS tidak crash saat boot jika server sedang mati/jaringan belum aktif
-# uid=1000,gid=1000,file_mode=0777,dir_mode=0777: hak akses penuh untuk pengguna biasa di Armbian
-MOUNT_OPTS="${MOUNT_AUTH},iocharset=utf8,uid=1000,gid=1000,file_mode=0777,dir_mode=0777,_netdev,nofail,vers=3.0"
-FSTAB_LINE="${FULL_REMOTE} ${LOCAL_MOUNT} cifs ${MOUNT_OPTS} 0 0"
-
-# Bersihkan konfigurasi lama jika pernah didaftarkan
-sed -i "\|${LOCAL_MOUNT}|d" /etc/fstab
-echo "${FSTAB_LINE}" >> /etc/fstab
-
-echo "[5/5] Memuat daemon dan mengeksekusi mounting..."
+mkdir -p "$MOUNT_DIR"
+sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf 2>/dev/null || true
+echo "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR} ${MOUNT_DIR} fuse.sshfs _netdev,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,IdentityFile=${KEY},StrictHostKeyChecking=accept-new,allow_other 0 0" >> /etc/fstab
 systemctl daemon-reload
-mount -a
-
-if mountpoint -q "${LOCAL_MOUNT}"; then
-    echo ""
-    echo "=== Berhasil! Penyimpanan terpasang di ${LOCAL_MOUNT} ==="
-    df -h "${LOCAL_MOUNT}"
-
-    # Verifikasi izin tulis
-    TEST_FILE="${LOCAL_MOUNT}/.test_write_perm"
-    if touch "${TEST_FILE}" 2>/dev/null; then
-        rm -f "${TEST_FILE}"
-        echo "Status Izin Tulis: OK (Bisa membaca dan menulis file)."
-    else
-        echo "[PERINGATAN] Folder ter-mount, namun izin tulis ditolak. Periksa opsi 'writeable = yes' pada konfigurasi Samba di server."
-    fi
+mount "$MOUNT_DIR" 2>/dev/null || rollback "mount ke ${REMOTE_HOST}:${REMOTE_DIR} gagal."
+FS="$(findmnt -n -o FSTYPE -T "$MOUNT_DIR" 2>/dev/null | head -n1)"
+[ "$FS" = "fuse.sshfs" ] || rollback "${MOUNT_DIR} tidak ter-mount sebagai sshfs."
+if touch "$MOUNT_DIR/.tulis_tes" 2>/dev/null; then
+  rm -f "$MOUNT_DIR/.tulis_tes"; echo "    Mount OK dan bisa ditulis."
 else
-    echo "[ERROR] Mount gagal ke ${FULL_REMOTE}. Periksa kembali nama share dan kredensialnya." >&2
-    exit 1
+  rollback "folder ${MOUNT_DIR} tidak bisa ditulis."
 fi
+
+echo "==> [4/6] Arahkan aria2 ke ${MOUNT_DIR}"
+if [ -f /root/.aria2/aria2.conf ]; then
+  sed -i "s|^dir=.*|dir=${MOUNT_DIR}|" /root/.aria2/aria2.conf
+fi
+if [ -f /etc/systemd/system/aria2.service ]; then
+  if grep -q '^RequiresMountsFor=' /etc/systemd/system/aria2.service; then
+    sed -i "s|^RequiresMountsFor=.*|RequiresMountsFor=${MOUNT_DIR}|" /etc/systemd/system/aria2.service
+  else
+    sed -i "/^After=/a RequiresMountsFor=${MOUNT_DIR}" /etc/systemd/system/aria2.service
+  fi
+  systemctl daemon-reload
+  systemctl restart aria2 2>/dev/null || true
+fi
+
+echo "==> [5/6] Pasang ulang yt / ytmp3 / ytm4a / ytlog"
+cat > /usr/local/bin/yt-run <<'EOF'
+#!/bin/bash
+# Pembantu untuk yt / ytmp3 / ytm4a.
+# SEMUA unduhan WAJIB masuk ke folder IDM di 192.168.18.2 (tidak pernah ke disk HG680P).
+DEST="__DEST__"
+MODE="$1"; shift
+
+if [ -z "$1" ]; then
+  echo "Pemakaian: yt | ytmp3 | ytm4a \"LINK_YOUTUBE\""
+  exit 1
+fi
+
+# Pastikan tujuan benar-benar mount sshfs, bukan folder kosong di disk lokal
+mountpoint -q "$DEST" 2>/dev/null || mount "$DEST" >/dev/null 2>&1
+FS="$(findmnt -n -o FSTYPE -T "$DEST" 2>/dev/null | head -n1)"
+if ! mountpoint -q "$DEST" 2>/dev/null || [ "$FS" != "fuse.sshfs" ]; then
+  echo "GAGAL: $DEST belum ter-mount ke folder IDM di 192.168.18.2."
+  echo "Unduhan dibatalkan supaya tidak tersimpan di disk HG680P."
+  echo "Perbaiki: jalankan 'mount $DEST' atau 'bash instalasi.sh'"
+  exit 1
+fi
+TESTF="$DEST/.tulis_tes_$$"
+if ! touch "$TESTF" 2>/dev/null; then
+  echo "GAGAL: folder $DEST tidak bisa ditulis."
+  exit 1
+fi
+rm -f "$TESTF"
+
+case "$MODE" in
+  mp3) OPTS=(-x --audio-format mp3) ;;
+  m4a) OPTS=(-f "bestaudio[ext=m4a]/bestaudio") ;;
+  *)   OPTS=() ;;
+esac
+
+mkdir -p /var/tmp/yt /var/tmp/yt-logs
+LOG="/var/tmp/yt-logs/$(date +%Y%m%d-%H%M%S).log"
+setsid nohup /usr/local/bin/yt-dlp --newline "${OPTS[@]}" \
+  -P "temp:/var/tmp/yt" -P "home:$DEST" \
+  -o "%(title)s [%(id)s].%(ext)s" "$@" > "$LOG" 2>&1 < /dev/null &
+ln -sf "$LOG" /var/tmp/yt-logs/latest.log
+echo "Unduhan berjalan di latar belakang. Terminal boleh ditutup."
+echo "Tujuan  : $DEST (folder IDM di 192.168.18.2)"
+echo "Progress: ytlog"
+EOF
+sed -i "s|__DEST__|${MOUNT_DIR}|" /usr/local/bin/yt-run
+
+cat > /usr/local/bin/yt <<'EOF'
+#!/bin/bash
+# Pemakaian: yt "LINK"   (video kualitas terbaik)
+exec /usr/local/bin/yt-run video "$@"
+EOF
+cat > /usr/local/bin/ytmp3 <<'EOF'
+#!/bin/bash
+# Pemakaian: ytmp3 "LINK"   (audio, diconvert ke mp3)
+exec /usr/local/bin/yt-run mp3 "$@"
+EOF
+cat > /usr/local/bin/ytm4a <<'EOF'
+#!/bin/bash
+# Pemakaian: ytm4a "LINK"   (audio asli m4a, tanpa convert)
+exec /usr/local/bin/yt-run m4a "$@"
+EOF
+cat > /usr/local/bin/ytlog <<'EOF'
+#!/bin/bash
+# Lihat progress unduhan terakhir (Ctrl+C untuk keluar, unduhan tetap jalan)
+tail -n 30 -f /var/tmp/yt-logs/latest.log
+EOF
+chmod +x /usr/local/bin/yt-run /usr/local/bin/yt /usr/local/bin/ytmp3 /usr/local/bin/ytm4a /usr/local/bin/ytlog
+
+echo "==> [6/6] Rapikan"
+rmdir "$OLD_MOUNT" 2>/dev/null || true
+
+echo
+echo "=============================================="
+echo " SELESAI - semua unduhan sekarang ke:"
+echo "   ${REMOTE_HOST}:${REMOTE_DIR}"
+findmnt "$MOUNT_DIR"
+echo " Cadangan fstab : $FSTAB_BAK"
+if [ -n "$OLD_SRC" ]; then
+  echo " File lama yang sudah terlanjur tersimpan ada di: $OLD_SRC"
+  echo "   (pindahkan sendiri lewat WinSCP bila perlu; script ini tidak memindah/menghapus file)"
+fi
+echo " Tes cepat      : ytm4a \"LINK\"  -> harus muncul baris 'Tujuan  : ${MOUNT_DIR}'"
+echo "=============================================="
