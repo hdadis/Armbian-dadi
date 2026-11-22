@@ -1,4 +1,3 @@
-cat << 'INSTALL_EOF' > /root/install.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -1273,6 +1272,4 @@ echo "Sisa eMMC    : $(df -h / | tail -n 1)"
 echo ""
 echo "Jalankan sekali di terminal ini lalu langsung pakai:"
 echo "  unalias denah 2>/dev/null || true && denah"
-INSTALL_EOF
-chmod +x /root/install.sh
-bash /root/install.sh
+
