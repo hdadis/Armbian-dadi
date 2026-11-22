@@ -1,95 +1,119 @@
 #!/bin/bash
 # ============================================================
-#  instalasi.sh - Downloader aria2 untuk Armbian HG680P
-#  Hasil download otomatis disimpan ke:
-#    192.168.18.2:/mnt/External/Downloads/IDM  (lewat sshfs)
-#  Aman dijalankan berulang kali.
+#  instalasi.sh - Downloader untuk Armbian HG680P
+#  aria2 + AriaNg (web UI) + yt-dlp (yt / ytmp3 / ytm4a)
+#
+#  SEMUA unduhan masuk ke folder IDM di 192.168.18.2:
+#      /mnt/External/Downloads/IDM
+#  - Kalau folder itu SUDAH ter-mount di HG680P (sshfs/cifs/nfs,
+#    termasuk kalau yang di-mount folder induknya), dipakai apa adanya.
+#  - Kalau belum, dipasang otomatis lewat sshfs.
+#  Aman dijalankan berulang kali (tidak menghapus file apa pun).
 # ============================================================
 set -e
 
-# ---------- PENGATURAN (ubah di sini kalau perlu) ----------
+# ---------- PENGATURAN ----------
 REMOTE_USER="root"
 REMOTE_HOST="192.168.18.2"
 REMOTE_DIR="/mnt/External/Downloads/IDM"
-MOUNT_DIR="/mnt/External/Downloads/IDM"
+MOUNT_DIR="/mnt/External/Downloads/IDM"   # lokasi di HG680P (sama dengan folder tujuan)
+OLD_MOUNT="/mnt/idm"                       # mount lama; dibersihkan bila masih ada
 RPC_PORT="6800"
 WEB_PORT="6880"
-# -----------------------------------------------------------
+# --------------------------------
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Jalankan sebagai root."; exit 1
 fi
-
-echo "==> [1/8] Install paket"
 export DEBIAN_FRONTEND=noninteractive
+
+# jenis filesystem tempat sebuah path berada (bukan sekadar mountpoint)
+fs_type()      { findmnt -n -o FSTYPE -T "$1" 2>/dev/null | head -n1; }
+is_remote_fs() { case "$1" in fuse.*|cifs|smb3|nfs|nfs4) return 0 ;; esac; return 1; }
+
+# ------------------------------------------------------------
+echo "==> [1/6] Install paket"
 apt-get update -y
-apt-get install -y aria2 sshfs fuse3 curl unzip python3 ca-certificates openssh-client
+apt-get install -y aria2 curl unzip python3 ca-certificates ffmpeg
 
-echo "==> [2/8] Cari SSH key"
-KEY=""
-for k in id_ed25519 id_rsa id_ecdsa; do
-  if [ -f "/root/.ssh/$k" ]; then KEY="/root/.ssh/$k"; break; fi
-done
-if [ -z "$KEY" ]; then
-  echo "    SSH key belum ada, membuat key baru..."
-  mkdir -p /root/.ssh && chmod 700 /root/.ssh
-  ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519 -q
-  KEY="/root/.ssh/id_ed25519"
-fi
-echo "    Pakai key: $KEY"
+# ------------------------------------------------------------
+echo "==> [2/6] Folder IDM di ${REMOTE_HOST}"
+FS="$(fs_type "$MOUNT_DIR")"
+if [ -d "$MOUNT_DIR" ] && is_remote_fs "$FS"; then
+  echo "    Sudah ter-mount (tipe: ${FS}), dipakai apa adanya."
+else
+  echo "    Belum ter-mount (terbaca: ${FS:-folder belum ada}). Memasang lewat sshfs..."
+  apt-get install -y sshfs fuse3 openssh-client
 
-echo "==> [3/8] Tes koneksi SSH ke ${REMOTE_HOST}"
-ssh_test() {
-  ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
-      "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${REMOTE_DIR}' && echo ok" >/dev/null 2>&1
-}
-if ! ssh_test; then
-  echo "    Login pakai key belum bisa. Mengirim key ke ${REMOTE_HOST}..."
-  echo "    >>> Masukkan password ${REMOTE_USER}@${REMOTE_HOST} (hanya sekali ini) <<<"
-  ssh-copy-id -i "${KEY}.pub" -o StrictHostKeyChecking=accept-new \
-      "${REMOTE_USER}@${REMOTE_HOST}" </dev/tty || true
+  KEY=""
+  for k in id_ed25519 id_rsa id_ecdsa; do
+    if [ -f "/root/.ssh/$k" ]; then KEY="/root/.ssh/$k"; break; fi
+  done
+  if [ -z "$KEY" ]; then
+    echo "    SSH key belum ada, membuat key baru..."
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519 -q
+    KEY="/root/.ssh/id_ed25519"
+  fi
+  ssh_test() {
+    ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
+        "${REMOTE_USER}@${REMOTE_HOST}" "test -d '${REMOTE_DIR}'" >/dev/null 2>&1
+  }
   if ! ssh_test; then
-    echo "Gagal SSH ke ${REMOTE_USER}@${REMOTE_HOST}. Cek IP, jaringan, password, dan apakah SSH root diizinkan di perangkat tujuan."
+    echo "    Login pakai key belum bisa. Mengirim key ke ${REMOTE_HOST}..."
+    echo "    >>> Masukkan password ${REMOTE_USER}@${REMOTE_HOST} (hanya sekali ini) <<<"
+    ssh-copy-id -i "${KEY}.pub" -o StrictHostKeyChecking=accept-new \
+        "${REMOTE_USER}@${REMOTE_HOST}" </dev/tty || true
+    if ! ssh_test; then
+      echo "GAGAL: tidak bisa SSH ke ${REMOTE_USER}@${REMOTE_HOST}, atau folder ${REMOTE_DIR} tidak ada di sana."
+      exit 1
+    fi
+  fi
+
+  # jangan menutupi file yang ada di disk lokal HG680P
+  if [ -d "$MOUNT_DIR" ] && [ -n "$(ls -A "$MOUNT_DIR" 2>/dev/null)" ]; then
+    echo "GAGAL: ${MOUNT_DIR} di HG680P berisi file dan terbaca sebagai disk LOKAL (tipe: ${FS:-?})."
+    echo "       Kalau menurut Anda folder ini sudah ter-mount ke ${REMOTE_HOST}, kirim hasil ini:"
+    echo "       findmnt -T ${MOUNT_DIR}"
     exit 1
   fi
+
+  mkdir -p "$MOUNT_DIR"
+  sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf 2>/dev/null || true
+  sed -i "\|[[:space:]]${MOUNT_DIR}[[:space:]]|d" /etc/fstab
+  echo "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR} ${MOUNT_DIR} fuse.sshfs _netdev,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,IdentityFile=${KEY},StrictHostKeyChecking=accept-new,allow_other 0 0" >> /etc/fstab
+  systemctl daemon-reload
+  mount "$MOUNT_DIR"
+  FS="$(fs_type "$MOUNT_DIR")"
+  if ! is_remote_fs "$FS"; then
+    echo "GAGAL: mount ke ${REMOTE_HOST}:${REMOTE_DIR} tidak berhasil (terbaca: ${FS:-?})."; exit 1
+  fi
 fi
 
-echo "==> [4/8] Pasang mount otomatis (sshfs)"
-# bersihkan mount lama /mnt/idm (dari instalasi sebelumnya), file di 192.168.18.2 tidak disentuh
-OLD_MOUNT="/mnt/idm"
-if [ "$MOUNT_DIR" != "$OLD_MOUNT" ]; then
+# pastikan benar-benar bisa ditulis
+if touch "$MOUNT_DIR/.tulis_tes" 2>/dev/null; then
+  rm -f "$MOUNT_DIR/.tulis_tes"
+  echo "    Folder IDM bisa ditulis."
+else
+  echo "GAGAL: folder ${MOUNT_DIR} tidak bisa ditulis."; exit 1
+fi
+
+# bersihkan mount lama (/mnt/idm) jika masih ada; file di 192.168.18.2 tidak disentuh
+if [ "$OLD_MOUNT" != "$MOUNT_DIR" ]; then
   systemctl stop aria2 2>/dev/null || true
-  if mountpoint -q "$OLD_MOUNT"; then
+  if mountpoint -q "$OLD_MOUNT" 2>/dev/null; then
     umount "$OLD_MOUNT" 2>/dev/null || umount -l "$OLD_MOUNT" 2>/dev/null || true
   fi
-  sed -i "\|[[:space:]]${OLD_MOUNT}[[:space:]]|d" /etc/fstab
+  if grep -q "[[:space:]]${OLD_MOUNT}[[:space:]]" /etc/fstab 2>/dev/null; then
+    sed -i "\|[[:space:]]${OLD_MOUNT}[[:space:]]|d" /etc/fstab
+    systemctl daemon-reload
+    echo "    Entri mount lama ${OLD_MOUNT} dihapus dari /etc/fstab."
+  fi
   rmdir "$OLD_MOUNT" 2>/dev/null || true
 fi
-# jangan sampai menutupi file lokal yang sudah ada di folder tujuan
-if [ -d "$MOUNT_DIR" ] && ! mountpoint -q "$MOUNT_DIR" && [ -n "$(ls -A "$MOUNT_DIR" 2>/dev/null)" ]; then
-  echo "Folder lokal ${MOUNT_DIR} di HG680P sudah ada isinya. Pindahkan/kosongkan dulu, lalu jalankan ulang."
-  exit 1
-fi
-mkdir -p "$MOUNT_DIR"
-sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf 2>/dev/null || true
-# hapus entri lama untuk mount ini, lalu tulis ulang
-sed -i "\|[[:space:]]${MOUNT_DIR}[[:space:]]|d" /etc/fstab
-echo "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR} ${MOUNT_DIR} fuse.sshfs _netdev,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,IdentityFile=${KEY},StrictHostKeyChecking=accept-new,allow_other 0 0" >> /etc/fstab
-systemctl daemon-reload
-systemctl stop aria2 2>/dev/null || true
-if mountpoint -q "$MOUNT_DIR"; then
-  umount "$MOUNT_DIR" 2>/dev/null || umount -l "$MOUNT_DIR" 2>/dev/null || true
-fi
-mount "$MOUNT_DIR"
-if touch "$MOUNT_DIR/.tes_tulis" 2>/dev/null; then
-  rm -f "$MOUNT_DIR/.tes_tulis"
-  echo "    Mount OK, folder bisa ditulis."
-else
-  echo "Mount berhasil tapi folder tidak bisa ditulis. Cek izin folder di ${REMOTE_HOST}."
-  exit 1
-fi
 
-echo "==> [5/8] Konfigurasi aria2"
+# ------------------------------------------------------------
+echo "==> [3/6] Konfigurasi aria2"
 mkdir -p /root/.aria2
 CONF="/root/.aria2/aria2.conf"
 SECRET=""
@@ -119,18 +143,35 @@ save-session-interval=60
 EOF
 touch /root/.aria2/aria2.session
 
-echo "==> [6/8] Service aria2 (jalan otomatis saat boot)"
-cat > /etc/systemd/system/aria2.service <<EOF
+# ------------------------------------------------------------
+echo "==> [4/6] Service aria2 (jalan otomatis, menunggu folder IDM siap)"
+# aria2 baru mulai setelah folder IDM terbaca sebagai folder jaringan,
+# supaya unduhan tidak pernah jatuh ke disk lokal HG680P.
+cat > /usr/local/bin/idm-wait <<'EOF'
+#!/bin/bash
+DEST="__DEST__"
+for i in $(seq 1 60); do
+  FS="$(findmnt -n -o FSTYPE -T "$DEST" 2>/dev/null | head -n1)"
+  case "$FS" in fuse.*|cifs|smb3|nfs|nfs4) exit 0 ;; esac
+  sleep 5
+done
+exit 1
+EOF
+sed -i "s|__DEST__|${MOUNT_DIR}|" /usr/local/bin/idm-wait
+chmod +x /usr/local/bin/idm-wait
+
+cat > /etc/systemd/system/aria2.service <<'EOF'
 [Unit]
 Description=aria2 downloader
-After=network-online.target
+After=network-online.target remote-fs.target
 Wants=network-online.target
-RequiresMountsFor=${MOUNT_DIR}
 
 [Service]
-ExecStart=/usr/bin/aria2c --conf-path=${CONF}
+ExecStartPre=/usr/local/bin/idm-wait
+ExecStart=/usr/bin/aria2c --conf-path=/root/.aria2/aria2.conf
 Restart=always
 RestartSec=5
+TimeoutStartSec=400
 
 [Install]
 WantedBy=multi-user.target
@@ -139,7 +180,8 @@ systemctl daemon-reload
 systemctl enable aria2 >/dev/null 2>&1
 systemctl restart aria2
 
-echo "==> [7/8] Web UI (AriaNg)"
+# ------------------------------------------------------------
+echo "==> [5/6] Web UI (AriaNg)"
 WEB_OK=0
 mkdir -p /opt/ariang
 URL="$(curl -fsSL https://api.github.com/repos/mayswind/AriaNg/releases/latest \
@@ -166,59 +208,91 @@ else
   echo "    Web UI gagal diunduh (aria2 tetap jalan, bisa dipakai lewat CLI)."
 fi
 
-echo "==> [8/8] Downloader YouTube (yt-dlp + ffmpeg)"
+# ------------------------------------------------------------
+echo "==> [6/6] Downloader YouTube (yt-dlp: yt / ytmp3 / ytm4a)"
 YT_OK=0
-apt-get install -y ffmpeg
 ARCH="$(uname -m)"
 if [ "$ARCH" = "aarch64" ]; then YT_FILE="yt-dlp_linux_aarch64"; else YT_FILE="yt-dlp"; fi
-if curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YT_FILE}" -o /usr/local/bin/yt-dlp; then
+if [ -x /usr/local/bin/yt-dlp ] || curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YT_FILE}" -o /usr/local/bin/yt-dlp; then
   chmod +x /usr/local/bin/yt-dlp
-  mkdir -p /var/tmp/yt
-  cat > /usr/local/bin/yt <<EOF
+  mkdir -p /var/tmp/yt /var/tmp/yt-logs
+
+cat > /usr/local/bin/yt-run <<'EOF'
 #!/bin/bash
-# Pemakaian: yt "LINK"   (video, jalan otomatis di latar belakang)
-mkdir -p /var/tmp/yt-logs
-LOG="/var/tmp/yt-logs/\$(date +%Y%m%d-%H%M%S).log"
-setsid nohup /usr/local/bin/yt-dlp --newline -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
-  -o "%(title)s [%(id)s].%(ext)s" "\$@" > "\$LOG" 2>&1 < /dev/null &
-ln -sf "\$LOG" /var/tmp/yt-logs/latest.log
+# Pembantu untuk yt / ytmp3 / ytm4a.
+# SEMUA unduhan WAJIB masuk ke folder IDM di 192.168.18.2 (tidak pernah ke disk HG680P).
+DEST="__DEST__"
+MODE="$1"; shift
+
+if [ -z "$1" ]; then
+  echo "Pemakaian: yt | ytmp3 | ytm4a \"LINK_YOUTUBE\""
+  exit 1
+fi
+
+is_remote_fs() { case "$1" in fuse.*|cifs|smb3|nfs|nfs4) return 0 ;; esac; return 1; }
+FS="$(findmnt -n -o FSTYPE -T "$DEST" 2>/dev/null | head -n1)"
+if ! is_remote_fs "$FS"; then
+  mount "$DEST" >/dev/null 2>&1          # coba mount via fstab bila ada
+  FS="$(findmnt -n -o FSTYPE -T "$DEST" 2>/dev/null | head -n1)"
+fi
+if [ ! -d "$DEST" ] || ! is_remote_fs "$FS"; then
+  echo "GAGAL: $DEST belum ter-mount ke folder IDM di 192.168.18.2 (terbaca: ${FS:-tidak ada})."
+  echo "Unduhan dibatalkan supaya tidak tersimpan di disk HG680P."
+  echo "Cek: findmnt -T $DEST   |   Perbaiki: mount $DEST  atau  bash instalasi.sh"
+  exit 1
+fi
+TESTF="$DEST/.tulis_tes_$$"
+if ! touch "$TESTF" 2>/dev/null; then
+  echo "GAGAL: folder $DEST tidak bisa ditulis."
+  exit 1
+fi
+rm -f "$TESTF"
+
+case "$MODE" in
+  mp3) OPTS=(-x --audio-format mp3) ;;
+  m4a) OPTS=(-f "bestaudio[ext=m4a]/bestaudio") ;;
+  *)   OPTS=() ;;
+esac
+
+mkdir -p /var/tmp/yt /var/tmp/yt-logs
+LOG="/var/tmp/yt-logs/$(date +%Y%m%d-%H%M%S).log"
+setsid nohup /usr/local/bin/yt-dlp --newline "${OPTS[@]}" \
+  -P "temp:/var/tmp/yt" -P "home:$DEST" \
+  -o "%(title)s [%(id)s].%(ext)s" "$@" > "$LOG" 2>&1 < /dev/null &
+ln -sf "$LOG" /var/tmp/yt-logs/latest.log
 echo "Unduhan berjalan di latar belakang. Terminal boleh ditutup."
-echo "Lihat progress: ytlog"
+echo "Tujuan  : $DEST (folder IDM di 192.168.18.2)"
+echo "Progress: ytlog"
 EOF
-  cat > /usr/local/bin/ytmp3 <<EOF
+  sed -i "s|__DEST__|${MOUNT_DIR}|" /usr/local/bin/yt-run
+
+cat > /usr/local/bin/yt <<'EOF'
 #!/bin/bash
-# Pemakaian: ytmp3 "LINK"   (audio mp3, jalan otomatis di latar belakang)
-mkdir -p /var/tmp/yt-logs
-LOG="/var/tmp/yt-logs/\$(date +%Y%m%d-%H%M%S).log"
-setsid nohup /usr/local/bin/yt-dlp --newline -x --audio-format mp3 -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
-  -o "%(title)s [%(id)s].%(ext)s" "\$@" > "\$LOG" 2>&1 < /dev/null &
-ln -sf "\$LOG" /var/tmp/yt-logs/latest.log
-echo "Unduhan berjalan di latar belakang. Terminal boleh ditutup."
-echo "Lihat progress: ytlog"
+# Pemakaian: yt "LINK"   (video kualitas terbaik)
+exec /usr/local/bin/yt-run video "$@"
 EOF
-  cat > /usr/local/bin/ytm4a <<EOF
+cat > /usr/local/bin/ytmp3 <<'EOF'
 #!/bin/bash
-# Pemakaian: ytm4a "LINK"   (audio asli m4a tanpa convert, jalan di latar belakang)
-mkdir -p /var/tmp/yt-logs
-LOG="/var/tmp/yt-logs/\$(date +%Y%m%d-%H%M%S).log"
-setsid nohup /usr/local/bin/yt-dlp --newline -f "bestaudio[ext=m4a]/bestaudio" -P "temp:/var/tmp/yt" -P "home:${MOUNT_DIR}" \\
-  -o "%(title)s [%(id)s].%(ext)s" "\$@" > "\$LOG" 2>&1 < /dev/null &
-ln -sf "\$LOG" /var/tmp/yt-logs/latest.log
-echo "Unduhan berjalan di latar belakang. Terminal boleh ditutup."
-echo "Lihat progress: ytlog"
+# Pemakaian: ytmp3 "LINK"   (audio, diconvert ke mp3)
+exec /usr/local/bin/yt-run mp3 "$@"
 EOF
-  cat > /usr/local/bin/ytlog <<'EOF'
+cat > /usr/local/bin/ytm4a <<'EOF'
+#!/bin/bash
+# Pemakaian: ytm4a "LINK"   (audio asli m4a, tanpa convert)
+exec /usr/local/bin/yt-run m4a "$@"
+EOF
+cat > /usr/local/bin/ytlog <<'EOF'
 #!/bin/bash
 # Lihat progress unduhan terakhir (Ctrl+C untuk keluar, unduhan tetap jalan)
 tail -n 30 -f /var/tmp/yt-logs/latest.log
 EOF
-  chmod +x /usr/local/bin/yt /usr/local/bin/ytmp3 /usr/local/bin/ytm4a /usr/local/bin/ytlog
+  chmod +x /usr/local/bin/yt-run /usr/local/bin/yt /usr/local/bin/ytmp3 /usr/local/bin/ytm4a /usr/local/bin/ytlog
   YT_OK=1
 else
   echo "    yt-dlp gagal diunduh (bagian aria2 tetap berfungsi)."
 fi
 
-# Plugin FFmpeg untuk MOC (mocp) agar bisa memutar m4a/webm, hanya jika mocp terpasang
+# Plugin FFmpeg untuk MOC (mocp) agar bisa memutar m4a, hanya jika mocp terpasang
 if command -v mocp >/dev/null 2>&1; then
   echo "    mocp terdeteksi, memasang plugin FFmpeg untuk MOC..."
   if apt-get install -y moc-ffmpeg-plugin; then
@@ -228,6 +302,7 @@ if command -v mocp >/dev/null 2>&1; then
   fi
 fi
 
+# ------------------------------------------------------------
 IP="$(hostname -I | awk '{print $1}')"
 SECRET_B64="$(printf '%s' "$SECRET" | base64 | tr -d '=\n')"
 
@@ -235,7 +310,7 @@ echo
 echo "=============================================="
 echo " SELESAI"
 echo "=============================================="
-echo " Folder download : ${REMOTE_HOST}:${REMOTE_DIR}"
+echo " Folder download : ${REMOTE_HOST}:${REMOTE_DIR}  (di HG680P: ${MOUNT_DIR})"
 echo " RPC secret      : ${SECRET}"
 if [ "$WEB_OK" -eq 1 ]; then
   echo " Web UI          : http://${IP}:${WEB_PORT}/#!/settings/rpc/set/ws/${IP}/${RPC_PORT}/jsonrpc/${SECRET_B64}"
@@ -245,9 +320,9 @@ fi
 echo " Via terminal    : aria2c -x 16 -s 16 -c -d ${MOUNT_DIR} \"LINK\""
 echo " Cek status      : systemctl status aria2"
 if [ "$YT_OK" -eq 1 ]; then
-  echo " YouTube (video) : yt \"LINK_YOUTUBE\"     -> ${REMOTE_HOST}:${REMOTE_DIR}"
-  echo " YouTube (mp3)   : ytmp3 \"LINK_YOUTUBE\""
+  echo " YouTube (video) : yt \"LINK_YOUTUBE\""
   echo " YouTube (m4a)   : ytm4a \"LINK_YOUTUBE\"   (tanpa convert, paling ringan)"
+  echo " YouTube (mp3)   : ytmp3 \"LINK_YOUTUBE\""
   echo " Lihat progress  : ytlog   (unduhan jalan di latar belakang, terminal boleh ditutup)"
   echo " Update yt-dlp   : yt-dlp -U   (jalankan kalau YouTube mulai error)"
 fi
