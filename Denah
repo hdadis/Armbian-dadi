@@ -4,7 +4,7 @@ set -euo pipefail
 # ==================== PENGATURAN (ubah jika perlu) ====================
 REMOTE_IP="192.168.18.2"
 REMOTE_USER="root"
-REMOTE_PASS="980Abc"
+REMOTE_PASS="xxxxx"
 REMOTE_DIR="/mnt/External/Downloads/IDM"
 DEFAULT_SUMBER="osm"        # "osm" (langsung OSM tanpa API) | "auto" (Gemini -> fallback OSM)
 # ======================================================================
