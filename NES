@@ -137,6 +137,8 @@ tee "$WEB_DIR/index.html" > /dev/null << 'HTMLEOF'
             <option value="roms/streetfighterex2plus.chd|psx">Street Fighter EX2 Plus (PS1)</option>
             <option value="roms/streetfighterexplusalpha.chd|psx">Street Fighter EX Plus Alpha (PS1)</option>
             <option value="roms/Tekken3.chd|psx">Tekken 3 (PS1)</option>
+            <option value="roms/Winning Eleven '97 (Japan).chd|psx">Winning Eleven '97 (Japan) (PS1)</option>
+            <option value="roms/Winning Eleven 2002 (Japan).chd|psx">Winning Eleven 2002 (Japan) (PS1)</option>
         </select>
         <button onclick="gantiGame()">Mainkan</button>
     </div>
