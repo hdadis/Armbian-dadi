@@ -192,6 +192,7 @@ denah.py — Diagram Radar Lokasi Strategis 4K (Armbian)
 - Default: OpenStreetMap (Overpass cepat + fallback node ringan + Nominatim), tanpa butuh API key.
 - Opsional: --sumber auto / --sumber gemini (sinkron dengan /root/api_keys.py).
 - Output langsung masuk ke /mnt/External/Downloads/IDM tanpa subfolder dan tanpa memenuhi eMMC.
+- Opsional: --salin-ke FOLDER menyalin PNG & TXT hasil ke folder lain (dipakai bot Telegram).
 """
 
 import argparse
@@ -1156,6 +1157,8 @@ def parse_args():
                    help=f"Sumber data: osm, auto, atau gemini (default: {SUMBER_DEFAULT})")
     p.add_argument("--model", default=DEFAULT_MODEL, help=f"Model Gemini (default: {DEFAULT_MODEL})")
     p.add_argument("--no-upload", action="store_true", help="Simpan lokal saja tanpa SCP")
+    p.add_argument("--salin-ke", dest="salin_ke", default=None,
+                   help="Salin PNG & TXT hasil ke folder ini (dipakai bot Telegram)")
     return p.parse_args()
 
 
@@ -1217,6 +1220,12 @@ def main():
     render_png(png_path, lat, lon, radius, kawasan, fasilitas, sumber_label)
     tulis_txt(txt_path, lat, lon, radius, kawasan, fasilitas, sumber_label)
 
+    if args.salin_ke:
+        os.makedirs(args.salin_ke, exist_ok=True)
+        for _src in (png_path, txt_path):
+            shutil.copy2(_src, args.salin_ke)
+        print(f"[Salin] Hasil disalin ke {args.salin_ke}")
+
     if langsung_external:
         print(f"Selesai (langsung di disk eksternal): {REMOTE_DIR}")
         return
@@ -1272,4 +1281,7 @@ echo "Sisa eMMC    : $(df -h / | tail -n 1)"
 echo ""
 echo "Jalankan sekali di terminal ini lalu langsung pakai:"
 echo "  unalias denah 2>/dev/null || true && denah"
-
+echo ""
+echo "Lewat Telegram (bot armbianbot sudah mendukung):"
+echo "  /run sudo denah \"6°23'22.8\"S 106°44'21.8\"E\" 4"
+echo "  /denah -6.389667 106.739389 4"
