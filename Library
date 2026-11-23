@@ -1,0 +1,257 @@
+#!/bin/bash
+set -e
+
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; RED='\033[0;31m'; NC='\033[0m'
+echo -e "${CYAN}=== Instalasi AI Asisten Modul + Referensi Luar (Versi Stabil) ===${NC}"
+
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}[ERROR] Jalankan dengan sudo! Contoh: sudo bash install.sh${NC}"; exit 1
+fi
+
+echo -e "\n${YELLOW}Masukkan Gemini API Key (AIzaSy...) atau tekan Enter untuk isi nanti di Web UI:${NC}"
+read -r USER_API_KEY
+[ -z "$USER_API_KEY" ] && USER_API_KEY="TEMPEL_API_KEY_ANDA_DISINI"
+
+echo -e "\n${YELLOW}[1/5] Instalasi dependensi sistem & optimasi ZRAM...${NC}"
+apt-get update -y
+apt-get install -y python3 python3-venv python3-pip python3-dev build-essential
+
+# Cek apakah ZRAM bawaan Armbian sudah ada agar tidak bentrok
+if systemctl list-unit-files | grep -q "armbian-zram-config"; then
+  echo -e "${GREEN}ZRAM bawaan Armbian terdeteksi, melewati instalasi zram-tools.${NC}"
+else
+  apt-get install -y zram-tools
+  systemctl enable zramswap 2>/dev/null || true
+  systemctl start zramswap 2>/dev/null || true
+fi
+
+echo -e "\n${YELLOW}[2/5] Membuat direktori & virtual environment...${NC}"
+APP_DIR="/opt/ai-modul"
+mkdir -p "$APP_DIR/modul_pdf" "$APP_DIR/database_ai"
+python3 -m venv "$APP_DIR/venv"
+"$APP_DIR/venv/bin/pip" install --upgrade pip --no-cache-dir
+"$APP_DIR/venv/bin/pip" install --no-cache-dir streamlit pypdf python-docx openpyxl pillow chromadb google-genai
+
+echo -e "\n${YELLOW}[3/5] Membuat modul pembaca dokumen (parser.py)...${NC}"
+cat << 'EOF' > "$APP_DIR/parser.py"
+import os, csv, time
+from pypdf import PdfReader
+from docx import Document
+import openpyxl
+from PIL import Image
+from google import genai
+
+EXTS = (".pdf", ".docx", ".xlsx", ".csv", ".txt", ".jpg", ".jpeg", ".png", ".webp")
+
+def ekstrak_teks(filepath, api_key=""):
+    ext = os.path.splitext(filepath)[1].lower()
+    hasil = []
+    if ext == ".pdf":
+        for i, p in enumerate(PdfReader(filepath).pages):
+            t = p.extract_text()
+            if t and len(t.strip()) > 30:
+                hasil.append((f"Hal {i+1}", t))
+    elif ext == ".docx":
+        t = "\n".join([p.text for p in Document(filepath).paragraphs if p.text.strip()])
+        if len(t.strip()) > 30:
+            hasil.append(("Dokumen Word", t))
+    elif ext == ".txt":
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            t = f.read()
+            if len(t.strip()) > 30:
+                hasil.append(("File Teks", t))
+    elif ext == ".xlsx":
+        wb = openpyxl.load_workbook(filepath, data_only=True)
+        for name in wb.sheetnames:
+            rows, headers = [], []
+            for r_idx, row in enumerate(wb[name].iter_rows(values_only=True)):
+                clean = [str(c).strip() if c is not None else "" for c in row]
+                if not any(clean):
+                    continue
+                if r_idx == 0:
+                    headers = clean
+                    rows.append("Kolom: " + " | ".join(headers))
+                else:
+                    rows.append(" ; ".join([f"{h}: {v}" for h, v in zip(headers, clean) if v]) if len(headers) == len(clean) else " | ".join([v for v in clean if v]))
+            if rows:
+                hasil.append((f"Sheet '{name}'", "\n".join(rows)))
+    elif ext == ".csv":
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            rows = [" | ".join(r) for r in csv.reader(f) if any(r)]
+            if rows:
+                hasil.append(("Data CSV", "\n".join(rows)))
+    elif ext in [".jpg", ".jpeg", ".png", ".webp"]:
+        if not api_key or "TEMPEL_API_KEY" in api_key:
+            raise ValueError("API Key wajib diisi untuk membaca file gambar.")
+        with Image.open(filepath) as img:
+            res = genai.Client(api_key=api_key).models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[img, "Transkripsikan seluruh teks, tabel, grafik, dan isi gambar ini secara rinci dalam bahasa Indonesia."]
+            )
+        if res.text and len(res.text.strip()) > 10:
+            hasil.append(("Gambar Modul", res.text))
+        time.sleep(4)
+    return hasil
+EOF
+
+echo -e "\n${YELLOW}[4/5] Membuat aplikasi web (app.py) & background indexer...${NC}"
+cat << 'EOF' > "$APP_DIR/app.py"
+import os, streamlit as st, chromadb
+from google import genai
+from parser import ekstrak_teks, EXTS
+
+MODUL_DIR, DB_DIR = "/opt/ai-modul/modul_pdf", "/opt/ai-modul/database_ai"
+DEFAULT_API_KEY = "__API_KEY_PLACEHOLDER__"
+
+st.set_page_config(page_title="AI Asisten Modul", page_icon="📚", layout="wide")
+st.title("📚 Asisten Tanya Jawab Modul + Referensi Luar")
+os.makedirs(MODUL_DIR, exist_ok=True)
+os.makedirs(DB_DIR, exist_ok=True)
+
+@st.cache_resource
+def get_collection():
+    client = chromadb.PersistentClient(path=DB_DIR)
+    return client, client.get_or_create_collection(name="kumpulan_modul")
+
+chroma_client, collection = get_collection()
+
+with st.sidebar:
+    st.header("⚙️ Pengaturan")
+    api_key = st.text_input("Gemini API Key:", value=DEFAULT_API_KEY, type="password")
+    st.divider()
+    uploaded = st.file_uploader("Upload Modul", type=[e.lstrip(".") for e in EXTS], accept_multiple_files=True)
+    if uploaded:
+        for f in uploaded:
+            with open(os.path.join(MODUL_DIR, f.name), "wb") as out:
+                out.write(f.getbuffer())
+        st.success(f"{len(uploaded)} file tersimpan!")
+    st.divider()
+    st.caption(f"Folder: `{MODUL_DIR}`")
+    if st.button("Proses & Indeks Semua Modul", type="primary", use_container_width=True):
+        files = [f for f in os.listdir(MODUL_DIR) if f.lower().endswith(EXTS)]
+        if not files:
+            st.warning("Folder modul kosong.")
+        else:
+            prog, status, total = st.progress(0), st.empty(), 0
+            for idx, fname in enumerate(files):
+                status.text(f"Membaca ({idx+1}/{len(files)}): {fname}")
+                try:
+                    for hal, text in ekstrak_teks(os.path.join(MODUL_DIR, fname), api_key):
+                        chunks = [text[i:i+1000] for i in range(0, len(text), 900)]
+                        for c_idx, chunk in enumerate(chunks):
+                            collection.upsert(
+                                documents=[chunk],
+                                metadatas=[{"sumber": fname, "halaman": hal}],
+                                ids=[f"{fname}_{hal}_c{c_idx}"]
+                            )
+                            total += 1
+                except Exception as e:
+                    st.error(f"Gagal {fname}: {e}")
+                prog.progress((idx + 1) / len(files))
+            status.text("Selesai!")
+            st.success(f"Terindeks {len(files)} file ({total} bagian)!")
+    st.info(f"Total materi terindeks: **{collection.count()}** bagian")
+    with st.expander("🗑️ Reset Database"):
+        if st.button("Hapus Semua Data & Indeks", use_container_width=True):
+            chroma_client.delete_collection(name="kumpulan_modul")
+            st.cache_resource.clear()
+            for f in os.listdir(MODUL_DIR):
+                fpath = os.path.join(MODUL_DIR, f)
+                if os.path.isfile(fpath):
+                    os.remove(fpath)
+            st.rerun()
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+if prompt := st.chat_input("Tanyakan sesuatu tentang isi modul Anda..."):
+    if not api_key or "TEMPEL_API_KEY" in api_key:
+        st.error("Masukkan Gemini API Key terlebih dahulu!")
+        st.stop()
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    with st.chat_message("assistant"):
+        with st.spinner("Mencari di seluruh modul..."):
+            total_data = collection.count()
+            konteks = "Tidak ditemukan di modul (database masih kosong)."
+            if total_data > 0:
+                res = collection.query(query_texts=[prompt], n_results=min(6, total_data))
+                docs = res.get("documents", [[]])[0]
+                metas = res.get("metadatas", [[]])[0]
+                if docs:
+                    konteks = "\n\n".join([f"[File: {m['sumber']} | {m['halaman']}]\n{d}" for d, m in zip(docs, metas)])
+
+            sistem = (
+                "Jawab pertanyaan dengan format WAJIB:\n\n"
+                "### 📖 [Dari Modul]\n"
+                "Jawab rinci berdasarkan KONTEKS MODUL di bawah, sebutkan nama file & halaman/sheet. "
+                "Jika tidak ada, tulis: 'Informasi ini tidak ditemukan secara spesifik di dalam modul.'\n\n"
+                "---\n\n"
+                "### 🌐 [Referensi Tambahan dari Sumber Luar]\n"
+                "Berikan penjelasan tambahan/contoh dari pengetahuan umum, dan beri keterangan jelas bahwa ini dari sumber luar modul.\n\n"
+                f"KONTEKS MODUL:\n{konteks}"
+            )
+            try:
+                ans = genai.Client(api_key=api_key).models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[sistem, f"Pertanyaan: {prompt}"]
+                ).text
+                st.markdown(ans)
+                st.session_state.messages.append({"role": "assistant", "content": ans})
+            except Exception as e:
+                st.error(f"Error API: {e}")
+EOF
+
+cat << 'EOF' > "$APP_DIR/index_background.py"
+import os, chromadb
+from parser import ekstrak_teks, EXTS
+
+MODUL_DIR, DB_DIR = "/opt/ai-modul/modul_pdf", "/opt/ai-modul/database_ai"
+API_KEY = "__API_KEY_PLACEHOLDER__"
+collection = chromadb.PersistentClient(path=DB_DIR).get_or_create_collection(name="kumpulan_modul")
+files = sorted([f for f in os.listdir(MODUL_DIR) if f.lower().endswith(EXTS)])
+
+print(f"=== Mulai mengindeks {len(files)} file di background ===", flush=True)
+total = 0
+for idx, fname in enumerate(files):
+    print(f"[{idx+1}/{len(files)}] Memproses: {fname}", flush=True)
+    try:
+        for hal, text in ekstrak_teks(os.path.join(MODUL_DIR, fname), API_KEY):
+            chunks = [text[i:i+1000] for i in range(0, len(text), 900)]
+            for c_idx, chunk in enumerate(chunks):
+                collection.upsert(
+                    documents=[chunk],
+                    metadatas=[{"sumber": fname, "halaman": hal}],
+                    ids=[f"{fname}_{hal}_c{c_idx}"]
+                )
+                total += 1
+    except Exception as e:
+        print(f"   -> [ERROR] {fname}: {e}", flush=True)
+print(f"=== SELESAI! Total {len(files)} file ({total} bagian) masuk database ===", flush=True)
+EOF
+
+sed -i "s|__API_KEY_PLACEHOLDER__|${USER_API_KEY}|g" "$APP_DIR/app.py" "$APP_DIR/index_background.py"
+
+echo -e "\n${YELLOW}[5/5] Mengaktifkan systemd service...${NC}"
+cat << EOF > /etc/systemd/system/ai-modul.service
+[Unit]
+Description=AI Asisten Modul RAG
+After=network.target
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$APP_DIR
+ExecStart=$APP_DIR/venv/bin/streamlit run $APP_DIR/app.py --server.port 8501 --server.address 0.0.0.0
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload && systemctl enable ai-modul && systemctl restart ai-modul
+IP_STB=$(hostname -I | awk '{print $1}')
+echo -e "\n${GREEN}=== SELESAI! Web UI: http://${IP_STB}:8501 ===${NC}"
+echo -e "${CYAN}Indeks Background:${NC} sudo nohup /opt/ai-modul/venv/bin/python /opt/ai-modul/index_background.py > /opt/ai-modul/proses.log 2>&1 &"
