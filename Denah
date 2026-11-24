@@ -1459,13 +1459,6 @@ else
 # Kategori: sekolah, universitas, rumah sakit, kantor polisi, mall, tempat hiburan,
 #           restoran (termasuk cafe), rekreasi (termasuk kolam renang), pasar, terminal, stasiun, bandara
 # Baris hanya dipakai jika tempatnya berada di dalam radius titik yang dianalisis.
-Cafe Makita:restoran
-Sekolah Bee:sekolah
-Sekolah Al Hikmah:sekolah
-Kolam Renang Pasir Putih:rekreasi
-Kolam Renang Zidan:rekreasi
-The Kandang:rekreasi
-Putri Duyung:rekreasi
 PIN_EOF
   echo "  -> $PIN_TARGET dibuat (berisi tempat lokal Depok; tambahkan koordinat jika ada yang tidak ketemu)."
 fi
