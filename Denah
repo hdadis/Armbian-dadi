@@ -6,7 +6,8 @@ REMOTE_IP="192.168.18.2"
 REMOTE_USER="root"
 REMOTE_PASS="xxxxx"
 REMOTE_DIR="/mnt/External/Downloads/IDM"
-GEMINI_MODEL_BARU="gemini-3.5-flash-lite"
+DEFAULT_SUMBER="osm"        # "osm" (gratis, tanpa API) | "auto" (Gemini -> fallback OSM) | "gemini"
+GEMINI_MODEL_BARU="gemini-3.5-flash-lite"   # hanya dipakai jika --sumber auto/gemini
 # ======================================================================
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -15,7 +16,7 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
 fi
 
 echo "============================================================"
-echo "  INSTALASI FINAL: denah (Gemini ${GEMINI_MODEL_BARU} -> IDM) + api_keys"
+echo "  INSTALASI FINAL: denah (OSM 4K + pin lokal -> IDM) + api_keys"
 echo "============================================================"
 
 # ----------------------------------------------------------------------
@@ -187,13 +188,14 @@ echo "  -> Symlink global aktif: $SITE_DIR/api_keys.py"
 # 4. PASANG SCRIPT UTAMA (/root/denah.py) + FILE PIN TEMPAT LOKAL
 # ----------------------------------------------------------------------
 echo ""
-echo "[4/5] Memasang /root/denah.py (Gemini ${GEMINI_MODEL_BARU}, langsung simpan ke IDM)..."
+echo "[4/5] Memasang /root/denah.py (default ${DEFAULT_SUMBER}, langsung simpan ke IDM)..."
 cat << 'DENAH_EOF' > /root/denah.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 denah.py — Diagram Radar Lokasi Strategis 4K (Armbian)
-- Sumber data: Gemini + Grounding Google Search (kunci & model dari /root/api_keys.py).
+- Default: OpenStreetMap (Overpass + Nominatim), gratis tanpa API key.
+- Opsional: --sumber auto / --sumber gemini (butuh API key Gemini berbayar untuk Google Search grounding).
 - Tempat lokal yang ingin dipastikan muncul: tulis di /root/poi_manual.txt atau pakai --pin.
 - Output langsung masuk ke /mnt/External/Downloads/IDM tanpa subfolder dan tanpa memenuhi eMMC.
 - Opsional: --salin-ke FOLDER menyalin PNG & TXT hasil ke folder lain (dipakai bot Telegram).
@@ -212,6 +214,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 try:
@@ -236,6 +239,23 @@ MAKS_TOTAL = 12          # batas keras agar layout 4K tetap rapi
 MAKS_PER_KAT = 3         # maksimal fasilitas per kategori pada putaran pengisian
 MIN_KANDIDAT_OK = 6      # jika sebuah key sudah memberi >= ini, key berikutnya tidak dicoba
 API_TIMEOUT = 150
+SUMBER_DEFAULT = os.environ.get("DENAH_SUMBER", "__DEFAULT_SUMBER__")
+
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+OSM_USER_AGENT = "DenahRadarLokasi/4.0 (Armbian-SelfHosted; contact: local-user)"
+OSM_TIMEOUT = 60
+BOBOT_KATEGORI_OSM = {
+    "bandara": 42, "stasiun": 40, "rumah sakit": 39, "mall": 38,
+    "terminal": 35, "universitas": 34, "pasar": 31, "kantor polisi": 29,
+    "rekreasi": 27, "tempat hiburan": 24, "sekolah": 22, "restoran": 15,
+}
 # ==============================================================
 
 PNG_NAME = "diagram_radar_lokasi_strategis.png"
@@ -265,6 +285,7 @@ NAMA_GENERIK_BLOKIR = {
     "rumah sakit", "hospital", "sekolah", "school", "universitas", "kampus",
     "pasar", "market", "mall", "mal", "taman", "park", "restoran", "restaurant",
     "terminal", "stasiun", "station", "polisi", "kantor polisi", "bandara",
+    "kolam renang", "swimming pool", "pool", "cafe", "kafe", "coffee shop",
 }
 
 WARNA = {
@@ -429,7 +450,7 @@ def olah_pin(daftar: list, lat0: float, lon0: float, radius: float):
     """
     Format baris: 'Nama:kategori' atau 'Nama:kategori:lat,lon'.
     - Dengan koordinat  -> langsung dipakai (jika dalam radius).
-    - Tanpa koordinat   -> dititipkan ke prompt Gemini sebagai tempat WAJIB diperiksa.
+    - Tanpa koordinat   -> dicari lewat Gemini (jika dipakai) atau OSM Nominatim berdasarkan nama.
     """
     pin_koord, wajib = [], []
     for p in daftar:
@@ -656,6 +677,319 @@ def ambil_dari_gemini(keys: list, model: str, lat: float, lon: float, radius: fl
             if i < len(keys):
                 time.sleep(0.5)
     return kawasan, terbaik, error_terakhir
+
+
+# ================ SUMBER: OPENSTREETMAP (NOMINATIM + OVERPASS) ===============
+def ambil_kawasan_nominatim(lat: float, lon: float) -> str:
+    params = urllib.parse.urlencode({
+        "format": "jsonv2", "lat": f"{lat:.6f}", "lon": f"{lon:.6f}",
+        "zoom": 16, "addressdetails": 1, "accept-language": "id",
+    })
+    req = urllib.request.Request(
+        f"{NOMINATIM_URL}?{params}", headers={"User-Agent": OSM_USER_AGENT}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        print(f"[OSM Nominatim] peringatan: {e}")
+        return "Tidak teridentifikasi"
+
+    addr = data.get("address") or {}
+    kel = addr.get("village") or addr.get("suburb") or addr.get("quarter") or addr.get("neighbourhood") or addr.get("hamlet") or ""
+    kec = addr.get("city_district") or addr.get("municipality") or addr.get("district") or (addr.get("suburb") if addr.get("village") else "") or ""
+    kota = addr.get("city") or addr.get("regency") or addr.get("county") or addr.get("town") or ""
+    prov = addr.get("state") or addr.get("region") or ""
+
+    kel_c = bersihkan_prefix(kel, r"^(kel\.?|kelurahan|desa|ds\.?)\s+") if kel else ""
+    kec_c = bersihkan_prefix(kec, r"^(kec\.?|kecamatan)\s+") if kec else ""
+    kota_c, prov_c = str(kota).strip(), str(prov).strip()
+    if kec_c and kel_c and kec_c.lower() == kel_c.lower():
+        kec_c = ""
+    if kota_c and kec_c and kota_c.lower() == kec_c.lower():
+        kec_c = ""
+
+    bagian = []
+    if kel_c:
+        bagian.append(f"Kel. {kel_c}")
+    if kec_c:
+        bagian.append(f"Kec. {kec_c}")
+    if kota_c:
+        bagian.append(kota_c)
+    if prov_c:
+        bagian.append(prov_c)
+    return ", ".join(bagian) if bagian else "Tidak teridentifikasi"
+
+
+def klasifikasi_tag_osm(tags: dict):
+    aeroway = (tags.get("aeroway") or "").lower()
+    railway = (tags.get("railway") or "").lower()
+    amenity = (tags.get("amenity") or "").lower()
+    shop = (tags.get("shop") or "").lower()
+    leisure = (tags.get("leisure") or "").lower()
+    tourism = (tags.get("tourism") or "").lower()
+    sport = (tags.get("sport") or "").lower()
+    nama_low = (tags.get("name") or "").lower()
+
+    if aeroway == "aerodrome":
+        return "bandara"
+    if railway in ("station", "halt"):
+        return "stasiun"
+    if amenity == "bus_station":
+        return "terminal"
+    if amenity == "hospital":
+        if any(k in nama_low for k in ("klinik", "puskesmas", "praktek", "praktik", "apotek")):
+            return None
+        return "rumah sakit"
+    if amenity in ("university", "college"):
+        return "universitas"
+    if shop in ("mall", "department_store"):
+        return "mall"
+    if amenity == "police":
+        return "kantor polisi"
+    if amenity == "marketplace":
+        return "pasar"
+    if (leisure in ("park", "water_park", "nature_reserve", "swimming_pool", "resort")
+            or (leisure == "sports_centre" and "swimming" in sport)
+            or tourism in ("attraction", "theme_park", "zoo", "picnic_site", "camp_site", "aquarium")
+            or any(k in nama_low for k in ("kolam renang", "waterpark", "water park", "waterboom", "water boom"))):
+        return "rekreasi"
+    if amenity in ("cinema", "theatre", "arts_centre") or leisure in ("amusement_arcade", "bowling_alley", "karaoke_box"):
+        return "tempat hiburan"
+    if amenity == "school":
+        return "sekolah"
+    if amenity in ("restaurant", "cafe", "food_court"):
+        return "restoran"
+    return None
+
+
+PENALTI_RE = re.compile(
+    r"\b(paud|tk|tka|tpa|ra|kb|playgroup|bimbel|kursus|warung|warteg|warkop|angkringan|"
+    r"kios|lapak|kantin|bakso|sate|geprek)\b"
+    r"|pos polisi|pos lantas|pos satpam|pecel lele|mie ayam|taman bermain|lapangan rt",
+    re.I,
+)
+
+
+def skor_strategis_osm(el: dict, tags: dict, kat: str, dist_km: float, radius_km: float) -> float:
+    nl = (tags.get("name") or "").strip().lower()
+    skor = float(BOBOT_KATEGORI_OSM.get(kat, 15))
+    if el.get("type") in ("way", "relation"):
+        skor += 14.0
+    if tags.get("wikidata") or tags.get("wikipedia"):
+        skor += 35.0
+    for k, pts in (("website", 8.0), ("contact:website", 8.0), ("brand", 6.0),
+                   ("operator", 5.0), ("opening_hours", 4.0), ("phone", 3.0),
+                   ("addr:street", 3.0), ("building", 3.0)):
+        if tags.get(k):
+            skor += pts
+    boost_kw = (
+        "rsud", "rumah sakit", "rs ", "hospital", "universitas", "institut",
+        "politeknik", "stasiun", "terminal", "bandara", "mall", "mal ",
+        "plaza", "town square", "square", "polres", "polsek", "polda",
+        "pasar ", "alun-alun", "alun alun", "taman ", "sma negeri", "sman ",
+        "smk negeri", "smkn ", "smp negeri", "smpn ", "bioskop", "xxi", "cgv",
+    )
+    if any(k in nl for k in boost_kw):
+        skor += 12.0
+    if PENALTI_RE.search(nl):
+        skor -= 24.0
+    if radius_km > 0:
+        skor += max(0.0, (1.0 - dist_km / radius_km)) * 10.0
+    return skor
+
+
+def hitung_bbox(lat: float, lon: float, radius_km: float):
+    dlat = radius_km / 111.32
+    dlon = radius_km / (111.32 * max(0.01, math.cos(math.radians(lat))))
+    return (lat - dlat, lon - dlon, lat + dlat, lon + dlon)
+
+
+def _kirim_overpass(q: str, label: str) -> list:
+    payload = urllib.parse.urlencode({"data": q}).encode("utf-8")
+    err_terakhir = ""
+    for url in OVERPASS_URLS:
+        host = urllib.parse.urlparse(url).netloc
+        print(f"[OSM {label}] {host}...", end=" ", flush=True)
+        req = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "User-Agent": OSM_USER_AGENT,
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=OSM_TIMEOUT) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            elems = data.get("elements") or []
+            print(f"-> {len(elems)} objek")
+            return elems
+        except Exception as e:
+            err_terakhir = str(e)
+            print(f"-> gagal ({err_terakhir[:100]})")
+            time.sleep(1.5)
+    raise RuntimeError(f"Semua mirror Overpass gagal: {err_terakhir}")
+
+
+def query_overpass(lat: float, lon: float, radius_km: float, tambahan: bool = False) -> list:
+    s, w, n, e = hitung_bbox(lat, lon, radius_km)
+    if not tambahan:
+        # Fasilitas besar/infrastruktur
+        q = f"""[out:json][timeout:40][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
+(
+  nw["aeroway"="aerodrome"]["name"];
+  nw["railway"="station"]["name"];
+  nw["amenity"="bus_station"]["name"];
+  nw["amenity"="hospital"]["name"];
+  nw["amenity"="university"]["name"];
+  nw["shop"="mall"]["name"];
+  nw["shop"="department_store"]["name"];
+  nw["amenity"="police"]["name"];
+  nw["amenity"="marketplace"]["name"];
+  nw["amenity"="cinema"]["name"];
+);
+out center 800;"""
+        try:
+            return _kirim_overpass(q, "Utama")
+        except Exception:
+            q_ringan = f"""[out:json][timeout:30][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
+(
+  node["railway"="station"]["name"];
+  node["amenity"="bus_station"]["name"];
+  node["amenity"="hospital"]["name"];
+  node["amenity"="university"]["name"];
+  node["shop"="mall"]["name"];
+  node["amenity"="police"]["name"];
+  node["amenity"="marketplace"]["name"];
+  node["tourism"="attraction"]["name"];
+);
+out 300;"""
+            return _kirim_overpass(q_ringan, "Ringan")
+
+    # Tempat lokal: sekolah, cafe/restoran, taman, kolam renang, wisata
+    q = f"""[out:json][timeout:40][bbox:{s:.5f},{w:.5f},{n:.5f},{e:.5f}];
+(
+  nw["leisure"~"^(park|water_park|swimming_pool|resort)$"]["name"];
+  nw["leisure"="sports_centre"]["sport"="swimming"]["name"];
+  nw["tourism"~"^(attraction|theme_park|zoo|picnic_site|camp_site|aquarium)$"]["name"];
+  nw["amenity"~"^(college|school|restaurant|cafe|food_court)$"]["name"];
+  nw["name"~"kolam renang|waterpark|water park|waterboom",i];
+);
+out center 800;"""
+    return _kirim_overpass(q, "Lokal")
+
+
+def _olah_elemen_osm(elems: list, lat0: float, lon0: float, radius: float) -> list:
+    kandidat = []
+    for el in elems:
+        tags = el.get("tags") or {}
+        nama = (tags.get("name") or "").strip()
+        if not nama or len(nama) < 3 or nama.lower() in NAMA_GENERIK_BLOKIR:
+            continue
+        kat = klasifikasi_tag_osm(tags)
+        if not kat:
+            continue
+        if "lat" in el and "lon" in el:
+            elat, elon = float(el["lat"]), float(el["lon"])
+        elif isinstance(el.get("center"), dict):
+            elat, elon = float(el["center"]["lat"]), float(el["center"]["lon"])
+        else:
+            continue
+        d = haversine_km(lat0, lon0, elat, elon)
+        if d > radius or d < 0.02:
+            continue
+        kandidat.append({
+            "nama": nama[:44], "kat": kat, "lat": elat, "lon": elon,
+            "d": d, "b": bearing_deg(lat0, lon0, elat, elon),
+            "skor": skor_strategis_osm(el, tags, kat, d, radius),
+        })
+
+    kandidat.sort(key=lambda x: (-x["skor"], x["d"]))
+    unik = []
+    for item in kandidat:
+        kunci = nk(item["nama"])
+        duplikat = False
+        for u in unik:
+            if kunci == nk(u["nama"]):
+                duplikat = True
+                break
+            if u["kat"] == item["kat"] and haversine_km(u["lat"], u["lon"], item["lat"], item["lon"]) < 0.12:
+                duplikat = True
+                break
+        if not duplikat:
+            unik.append(item)
+    return unik
+
+
+def ambil_dari_osm(lat0: float, lon0: float, radius: float):
+    """Mengembalikan (kawasan, SEMUA kandidat unik). Pemilihan akhir dilakukan di main()."""
+    print("[OSM Nominatim] Mengidentifikasi perkiraan kawasan...", flush=True)
+    kawasan = ambil_kawasan_nominatim(lat0, lon0)
+    elems = query_overpass(lat0, lon0, radius, tambahan=False)
+    try:
+        elems2 = query_overpass(lat0, lon0, radius, tambahan=True)
+    except Exception as e:
+        print(f"[OSM Lokal] dilewati ({str(e)[:100]})")
+        elems2 = []
+    unik = _olah_elemen_osm(elems + elems2, lat0, lon0, radius)
+    print(f"[OSM] {len(unik)} kandidat unik dalam radius")
+    return kawasan, unik
+
+
+PREFIKS_GENERIK = re.compile(r"^(cafe|café|kafe|restoran|rumah makan|sekolah|kolam renang|taman|wisata)\s+", re.I)
+
+
+def cari_nominatim_nama(nama: str, lat0: float, lon0: float, radius: float):
+    """Cari tempat berdasarkan nama di sekitar titik rumah. Return (jarak_km, lat, lon) atau None."""
+    s, w, n, e = hitung_bbox(lat0, lon0, radius)
+    varian = [nama]
+    pendek = PREFIKS_GENERIK.sub("", nama).strip()
+    if pendek and pendek.lower() != nama.lower():
+        varian.append(pendek)
+    for q in varian:
+        params = urllib.parse.urlencode({
+            "format": "jsonv2", "q": q, "limit": 8, "countrycodes": "id",
+            "viewbox": f"{w:.5f},{n:.5f},{e:.5f},{s:.5f}", "bounded": 1,
+            "accept-language": "id",
+        })
+        req = urllib.request.Request(
+            f"{NOMINATIM_SEARCH_URL}?{params}", headers={"User-Agent": OSM_USER_AGENT}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=25) as r:
+                hasil = json.loads(r.read().decode("utf-8"))
+        except Exception as ex:
+            print(f"[Pin] pencarian '{q}' gagal: {str(ex)[:80]}")
+            hasil = []
+        time.sleep(1.1)  # kebijakan Nominatim: maks 1 permintaan/detik
+        cocok = []
+        for h in hasil:
+            try:
+                la, lo = float(h["lat"]), float(h["lon"])
+            except Exception:
+                continue
+            d = haversine_km(lat0, lon0, la, lo)
+            if 0.02 <= d <= radius:
+                cocok.append((d, la, lo))
+        if cocok:
+            return min(cocok)
+    return None
+
+
+def resolusi_pin_osm(wajib: list, lat0: float, lon0: float, radius: float):
+    hasil, hilang = [], []
+    for nama, kat in wajib:
+        c = cari_nominatim_nama(nama, lat0, lon0, radius)
+        if not c:
+            hilang.append(nama)
+            continue
+        d, la, lo = c
+        hasil.append({
+            "nama": nama[:44], "kat": kat, "lat": la, "lon": lo, "d": d,
+            "b": bearing_deg(lat0, lon0, la, lo), "skor": 500.0, "pin": True,
+        })
+        print(f"[Pin] {nama} ({KAT_DISPLAY[kat]}) {fmt_km(d)} km (via OSM)")
+    return hasil, hilang
 
 
 # ================================= RENDER PNG =================================
@@ -965,13 +1299,14 @@ def ambil_keys() -> list:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Generator Diagram Radar Lokasi Strategis 4K (Gemini)")
+    p = argparse.ArgumentParser(description="Generator Diagram Radar Lokasi Strategis 4K")
     p.add_argument("koordinat", nargs="?", help="Koordinat DMS atau desimal")
     p.add_argument("radius", nargs="?", type=str, help="Radius maksimal dalam km")
+    p.add_argument("--sumber", choices=("osm", "auto", "gemini"), default=SUMBER_DEFAULT,
+                   help=f"Sumber data: osm, auto (Gemini lalu OSM), atau gemini (default: {SUMBER_DEFAULT})")
     p.add_argument("--model", default=DEFAULT_MODEL, help=f"Model Gemini (default: {DEFAULT_MODEL})")
     p.add_argument("--pin", action="append", default=[],
-                   help="Tempat lokal wajib dicek: 'Nama:kategori' atau 'Nama:kategori:lat,lon' (boleh berulang)")
-    p.add_argument("--sumber", default="gemini", help=argparse.SUPPRESS)  # kompatibilitas bot lama (diabaikan)
+                   help="Tempat lokal wajib muncul: 'Nama:kategori' atau 'Nama:kategori:lat,lon' (boleh berulang)")
     p.add_argument("--no-upload", action="store_true", help="Simpan lokal saja tanpa SCP")
     p.add_argument("--salin-ke", dest="salin_ke", default=None,
                    help="Salin PNG & TXT hasil ke folder ini (dipakai bot Telegram)")
@@ -992,23 +1327,69 @@ def main():
         sys.exit("Radius harus lebih besar dari 0 km.")
 
     lat, lon = parse_koordinat(kor_str)
-    print(f"Titik: {lat:.6f}, {lon:.6f} | Radius: {radius:g} km | Model: {args.model}")
-    if args.sumber != "gemini":
-        print(f"[Info] --sumber {args.sumber} diabaikan: script ini hanya memakai Gemini.")
+    print(f"Titik: {lat:.6f}, {lon:.6f} | Radius: {radius:g} km | Mode: {args.sumber}")
 
-    keys = ambil_keys()
-    if not keys:
-        sys.exit("API key Gemini belum diisi. Edit /root/api_keys.py (GEMINI_KEYS).")
-
+    # Tempat lokal: berkoordinat langsung dipakai, tanpa koordinat dicari (Gemini/Nominatim)
     pin_koord, wajib = olah_pin(args.pin + baca_file_pin(), lat, lon, radius)
-    kawasan, kandidat, error_terakhir = ambil_dari_gemini(keys, args.model, lat, lon, radius, wajib)
-    sumber_label = f"Google Search via Gemini ({args.model})"
+    ada_pin_manual = bool(pin_koord)
 
-    # Pin berkoordinat menggantikan kandidat Gemini yang namanya sama
+    kawasan, kandidat, sumber_label, error_terakhir = None, [], "", ""
+
+    if args.sumber in ("auto", "gemini"):
+        keys = ambil_keys()
+        if keys:
+            kaw, kand, err = ambil_dari_gemini(keys, args.model, lat, lon, radius, wajib)
+            if kand:
+                kawasan, kandidat = kaw, kand
+                sumber_label = f"Google Search via Gemini ({args.model})"
+            else:
+                error_terakhir = err
+        elif args.sumber == "gemini":
+            sys.exit("Mode --sumber gemini memerlukan API key aktif di /root/api_keys.py.")
+        else:
+            print("[Info] API key Gemini kosong -> langsung menggunakan OpenStreetMap.")
+
+    if not kandidat and args.sumber in ("osm", "auto"):
+        if args.sumber == "auto" and error_terakhir:
+            print(f"[Fallback] Gemini gagal ({error_terakhir[:100]}) -> beralih ke OpenStreetMap...")
+        try:
+            kawasan, kandidat = ambil_dari_osm(lat, lon, radius)
+            sumber_label = "OpenStreetMap (Overpass & Nominatim)"
+        except Exception as e:
+            if not pin_koord:
+                sys.exit(f"Gagal mengambil data dari OpenStreetMap: {e}")
+            print(f"[Peringatan] OpenStreetMap gagal ({str(e)[:100]}); hanya memakai tempat pin.")
+            sumber_label = "Data manual (poi_manual.txt)"
+
+    # Tempat wajib yang sudah ada di data sumber utama -> tandai sebagai pin (koordinat sumber dipakai)
+    belum = []
+    for n, k in wajib:
+        varian = [x for x in {nk(n), nk(PREFIKS_GENERIK.sub("", n))} if x]
+        if any(c.get("pin") and cocok_nama(c["nama"], varian) for c in kandidat):
+            continue
+        cocok = [c for c in kandidat if not c.get("pin") and cocok_nama(c["nama"], varian)]
+        if cocok:
+            c = min(cocok, key=lambda x: x["d"])
+            c["pin"], c["skor"], c["kat"] = True, 500.0, k
+        else:
+            belum.append((n, k))
+
+    # Sisanya -> cari lewat OSM Nominatim berdasarkan nama
+    if belum:
+        print("[Pin] Mencari tempat lokal lewat OSM Nominatim...")
+        p2, hilang = resolusi_pin_osm(belum, lat, lon, radius)
+        pin_koord += p2
+        if hilang:
+            print("[Pin] TIDAK ketemu / di luar radius: " + ", ".join(hilang))
+            print("      Tambahkan koordinat Google Maps di /root/poi_manual.txt, contoh: Nama:rekreasi:-6.4300,106.7850")
+
+    # Pin berkoordinat menggantikan kandidat sumber utama yang namanya sama
     kunci_pin = [nk(p["nama"]) for p in pin_koord]
     kandidat = [c for c in kandidat if not cocok_nama(c["nama"], kunci_pin)] + pin_koord
     if not kandidat:
         sys.exit(f"Tidak ada fasilitas ditemukan dalam radius {radius:g} km. Error: {error_terakhir}")
+    if ada_pin_manual and "poi_manual" not in sumber_label:
+        sumber_label += " + pin manual"
 
     jumlah_pin = sum(1 for c in kandidat if c.get("pin"))
     maks = min(MAKS_TOTAL, max(MAKS_FASILITAS, jumlah_pin))
@@ -1025,11 +1406,6 @@ def main():
     for f in fasilitas:
         tanda = " *" if f.get("pin") else ""
         print(f"  [{f['no']}] {f['nama']} ({KAT_DISPLAY[f['kat']]}) — {fmt_km(f['d'])} km ({f['arah']}){tanda}")
-    if wajib:
-        ketemu = [n for n, _ in wajib if any(f.get("pin") and cocok_nama(f["nama"], [nk(n)]) for f in fasilitas)]
-        hilang = [n for n, _ in wajib if n not in ketemu]
-        if hilang:
-            print("[Pin] tidak ditemukan/di luar radius: " + ", ".join(hilang))
 
     print("Merender PNG 4K (3840x3840 @ 400 DPI)...")
     render_png(png_path, lat, lon, radius, kawasan, fasilitas, sumber_label)
@@ -1061,6 +1437,7 @@ if __name__ == "__main__":
 DENAH_EOF
 
 sed -i \
+  -e "s|__DEFAULT_SUMBER__|${DEFAULT_SUMBER}|g" \
   -e "s|__MODEL__|${GEMINI_MODEL_BARU}|g" \
   -e "s|__REMOTE_USER__|${REMOTE_USER}|g" \
   -e "s|__REMOTE_IP__|${REMOTE_IP}|g" \
@@ -1075,9 +1452,10 @@ if [ -f "$PIN_TARGET" ]; then
   echo "  -> $PIN_TARGET sudah ada (tidak ditimpa)."
 else
   cat << 'PIN_EOF' > "$PIN_TARGET"
-# Tempat lokal yang WAJIB dicek Gemini. Satu baris satu tempat.
-# Format : Nama:kategori            (Gemini yang mencari koordinatnya)
-#          Nama:kategori:lat,lon    (koordinat dari Google Maps, paling akurat)
+# Tempat lokal yang WAJIB muncul di diagram. Satu baris satu tempat.
+# Format : Nama:kategori            (dicari otomatis lewat OpenStreetMap berdasarkan nama)
+#          Nama:kategori:lat,lon    (koordinat dari Google Maps -> paling akurat, dipakai jika tidak ketemu)
+# Cara ambil koordinat: di Google Maps tekan lama di lokasi tempat, lalu salin angka lat,lon.
 # Kategori: sekolah, universitas, rumah sakit, kantor polisi, mall, tempat hiburan,
 #           restoran (termasuk cafe), rekreasi (termasuk kolam renang), pasar, terminal, stasiun, bandara
 # Baris hanya dipakai jika tempatnya berada di dalam radius titik yang dianalisis.
@@ -1089,7 +1467,7 @@ Kolam Renang Zidan:rekreasi
 The Kandang:rekreasi
 Putri Duyung:rekreasi
 PIN_EOF
-  echo "  -> $PIN_TARGET dibuat (berisi contoh tempat lokal Depok)."
+  echo "  -> $PIN_TARGET dibuat (berisi tempat lokal Depok; tambahkan koordinat jika ada yang tidak ketemu)."
 fi
 
 # ----------------------------------------------------------------------
@@ -1113,9 +1491,9 @@ echo ""
 echo "============================================================"
 echo "  INSTALASI SELESAI!"
 echo "============================================================"
-echo "Sumber data  : Gemini ${GEMINI_MODEL_BARU} + Google Search (butuh API key)"
-echo "API key      : isi GEMINI_KEYS di /root/api_keys.py"
-echo "Tempat lokal : edit /root/poi_manual.txt (opsional)"
+echo "Mode default : ${DEFAULT_SUMBER} (tanpa butuh API key)"
+echo "Opsi Gemini  : denah --sumber auto ... (butuh GEMINI_KEYS berbayar di /root/api_keys.py)"
+echo "Tempat lokal : edit /root/poi_manual.txt (tambah koordinat jika tidak ketemu)"
 echo "Tujuan hasil : ${REMOTE_USER}@${REMOTE_IP}:${REMOTE_DIR} (langsung tanpa subfolder)"
 echo "Sisa eMMC    : $(df -h / | tail -n 1)"
 echo ""
